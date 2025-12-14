@@ -1,0 +1,194 @@
+================================================================================
+OLLAMA SETUP & CONFIGURATION GUIDE
+================================================================================
+
+Quick setup guide for running Ollama with the Verifiable AI Agent Server.
+
+================================================================================
+SECTION 1: SYSTEM REQUIREMENTS
+================================================================================
+
+MINIMUM REQUIREMENTS
+- CPU: Multi-core processor (4+ cores)
+- RAM: 8GB minimum (16GB+ recommended)
+- Disk Space: 20-50GB free
+- GPU: Optional (NVIDIA CUDA or Apple Metal for acceleration)
+- Internet: Required for model download (one-time)
+
+SUPPORTED SYSTEMS
+- Windows 10/11
+- macOS 11+
+- Linux (Ubuntu 20.04+, Fedora 35+)
+
+================================================================================
+SECTION 2: INSTALLING OLLAMA
+================================================================================
+
+WINDOWS & macOS
+===============
+1. Visit https://ollama.ai/download
+2. Download the installer for your OS
+3. Run the installer and follow the prompts
+4. Restart your computer
+5. Verify installation:
+   
+   $ ollama --version
+
+LINUX (Ubuntu/Debian)
+=====================
+1. Open terminal and run:
+   
+   $ curl https://ollama.ai/install.sh | sh
+
+2. Verify installation:
+   
+   $ ollama --version
+
+================================================================================
+SECTION 3: STARTING OLLAMA SERVER
+================================================================================
+
+WINDOWS & macOS
+===============
+Ollama runs automatically in the background after installation.
+- Look for Ollama icon in system tray (Windows) or menu bar (macOS)
+- Server listens on http://localhost:11434
+
+To start manually from command line:
+   $ ollama serve
+
+LINUX
+=====
+Start the service:
+   $ sudo systemctl start ollama
+
+Verify it's running:
+   $ sudo systemctl status ollama
+
+View logs:
+   $ sudo journalctl -u ollama -f
+
+================================================================================
+SECTION 4: CHOOSING & PULLING A MODEL
+================================================================================
+
+RECOMMENDED MODELS FOR THIS PROJECT
+
+Small & Fast (Recommended for testing):
+- mistral (4.1GB) ⭐ BEST CHOICE
+  Fast inference, good quality, best for tool calling
+
+- neural-chat (4.1GB)
+  Optimized for conversational tasks
+
+Medium Size (Balanced):
+- llama2 (3.8GB)
+  General purpose, widely tested
+
+PULLING A MODEL
+===============
+
+Step 1: Verify Ollama is running
+- Windows/macOS: Check system tray/menu bar for Ollama icon
+- Linux: Run: sudo systemctl status ollama
+
+Step 2: Open terminal/PowerShell in your project directory:
+
+   $ cd "path/to/Project v2"
+
+Step 3: Download the model:
+
+   $ ollama pull mistral
+
+   This may take 5-30 minutes depending on internet speed.
+   Progress bar will show download status.
+
+Step 4: Verify model is loaded:
+
+   $ ollama list
+
+   Expected output:
+   NAME         ID              SIZE    MODIFIED
+   mistral      0bfb2f4da2      3.8 GB  2 minutes ago
+
+================================================================================
+SECTION 5: TESTING OLLAMA CONNECTION
+================================================================================
+
+VERIFY SETUP WITH DIAGNOSTICS
+==============================
+
+Before running project code, verify Ollama is working:
+
+   $ $env:PYTHONPATH = "."; python examples/ollama_diagnostics.py
+
+Expected output (all checks should show [OK]):
+
+   [OK] Ollama Server
+       Running at http://localhost:11434
+
+   [OK] Models Available
+       mistral (3.8 GB)
+
+   [OK] Generate Endpoint Test
+       Successfully called /api/generate
+
+   [SUCCESS] Ollama is ready!
+
+TROUBLESHOOTING COMMON ISSUES
+==============================
+
+Issue: "Cannot connect to http://localhost:11434"
+Solution:
+1. Start Ollama (see Section 3)
+2. Wait 10 seconds for server to start
+3. Verify: curl http://localhost:11434/api/tags
+
+Issue: "Model 'mistral' not found"
+Solution:
+1. Run: ollama pull mistral
+2. Wait for download to complete
+3. Run diagnostics again
+
+Issue: "Out of memory" error
+Solution:
+1. Check available RAM: 8GB minimum required
+2. Close other applications
+3. Try smaller model: ollama pull neural-chat
+
+================================================================================
+NEXT STEPS
+================================================================================
+
+1. ✅ Complete Sections 1-5 above
+2. ✅ Run diagnostics script (Section 5)
+3. ✅ Run validation: python examples/validate_phase2.py
+4. ✅ Run demo: python examples/llm_demo.py
+
+QUICK REFERENCE
+===============
+
+# Pull a model
+$ ollama pull mistral
+
+# List installed models
+$ ollama list
+
+# Run a model interactively
+$ ollama run mistral
+
+# Delete a model
+$ ollama rm mistral
+
+# Start server
+$ ollama serve
+
+# Verify server running
+$ curl http://localhost:11434/api/tags
+
+# Check version
+$ ollama --version
+
+For more advanced configuration, see README.md and src/config.py
+
+================================================================================

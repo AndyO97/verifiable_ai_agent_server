@@ -1,0 +1,89 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "verifiable-ai-agent-server"
+version = "0.1.0"
+description = "High-integrity, self-hosted AI Agent Server with Verkle Tree commitment"
+authors = [{name = "Verifiable AI Team", email = "team@example.com"}]
+readme = "README.md"
+requires-python = ">=3.11"
+
+dependencies = [
+    # FastMCP for agent framework
+    "fastmcp>=0.1.0",
+    # Cryptography
+    "pycryptodome>=3.19.0",
+    # Serialization & canonical encoding
+    "msgpack>=1.0.0",
+    "json-canonicalize>=0.1.0",
+    # Data validation
+    "pydantic>=2.5.0",
+    "pydantic-settings>=2.1.0",
+    # Observability
+    "opentelemetry-api>=1.21.0",
+    "opentelemetry-sdk>=1.21.0",
+    "opentelemetry-exporter-otlp>=1.21.0",
+    "opentelemetry-instrumentation>=0.42b0",
+    "opentelemetry-instrumentation-requests>=0.42b0",
+    "opentelemetry-instrumentation-sqlalchemy>=0.42b0",
+    # Database
+    "sqlalchemy>=2.0.0",
+    "psycopg2-binary>=2.9.0",
+    "alembic>=1.13.0",
+    # Time handling
+    "python-dateutil>=2.8.2",
+    # Storage (S3/Azure Blob)
+    "boto3>=1.34.0",
+    "azure-storage-blob>=12.19.0",
+    # Security
+    "python-jose>=3.3.0",
+    "cryptography>=41.0.0",
+    # CLI
+    "typer>=0.9.0",
+    "click>=8.1.0",
+    # Logging
+    "structlog>=23.2.0",
+    # HTTP Server (FastMCP might use Starlette)
+    "starlette>=0.35.0",
+    "uvicorn>=0.25.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.1.0",
+    "ruff>=0.1.0",
+    "mypy>=1.7.0",
+    "black>=23.12.0",
+    "isort>=5.13.0",
+]
+
+[project.scripts]
+verify = "src.tools.verify_cli:main"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP"]
+ignore = ["E501"]  # Line length handled by black
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+
+[tool.black]
+line-length = 120
+target-version = ["py311"]
+
+[tool.isort]
+profile = "black"
+line_length = 120
+target_version = "py311"

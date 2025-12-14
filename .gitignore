@@ -1,0 +1,82 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Poetry
+poetry.lock
+
+# uv (new package manager)
+.venv/
+venv.lock
+uv.lock
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Environment
+.env
+.env.local
+*.pem
+*.key
+
+# Database
+*.db
+*.sqlite
+data/
+
+# Logs
+*.log
+logs/
+
+# Output
+artifacts/
+outputs/
+
+# Generated files
+*.pyc
+.mypy_cache/
+.ruff_cache/
+
+# OS files
+Thumbs.db
+.AppleDouble
+.LSOverride
+
+# Project specific
+venv.ps1
+.python-version.bak
+
+PROPOSAL.txt
