@@ -11,7 +11,8 @@ This script validates Phase 2 LLM integration with actual Ollama workloads:
 
 Expected outcomes:
 - All scenarios complete successfully
-- Deterministic Verkle roots (same events = same root within session)
+- Deterministic Merkle tree roots (same events = same root within session)
+  * NOTE: Currently using Merkle tree (Phase 3 upgrades to Verkle with KZG)
 - Event counts match expected structure
 - No unauthorized tool access
 - Proper error handling
@@ -107,7 +108,7 @@ def test_scenario_1_simple_query():
     print_result("Output Length", len(result["output"]))
     print_result("Turns Taken", result["turns"])
     print_result("Event Count", result["integrity"]["event_count"])
-    print_result("Verkle Root Valid", bool(result["integrity"]["verkle_root_b64"]))
+    print_result("Merkle Root Valid", bool(result["integrity"]["verkle_root_b64"]))
     print_result("Session ID", result["integrity"]["session_id"])
     
     # Success criteria
@@ -165,7 +166,7 @@ def test_scenario_2_single_tool():
     print_result("Output Length", len(result["output"]))
     print_result("Turns Taken", result["turns"])
     print_result("Event Count", result["integrity"]["event_count"])
-    print_result("Verkle Root Valid", bool(result["integrity"]["verkle_root_b64"]))
+    print_result("Merkle Root Valid", bool(result["integrity"]["verkle_root_b64"]))
     
     # Success criteria
     success = (
@@ -229,7 +230,7 @@ def test_scenario_3_multi_turn():
     print_result("Output Length", len(result["output"]))
     print_result("Turns Taken", result["turns"])
     print_result("Event Count", result["integrity"]["event_count"])
-    print_result("Verkle Root Valid", bool(result["integrity"]["verkle_root_b64"]))
+    print_result("Merkle Root Valid", bool(result["integrity"]["verkle_root_b64"]))
     
     # Success criteria
     success = (
@@ -314,14 +315,16 @@ def test_scenario_4_security():
 
 def test_determinism():
     """
-    Test determinism: Same query = same Verkle root within same session
+    Test determinism: Same query = same Merkle root within same session
     
     Validates:
     - Running the same agent run produces deterministic results
     - Counter sequence is reproducible
     - Integrity commitments are consistent
+    
+    NOTE: Currently using Merkle tree (Phase 3 upgrades to Verkle with KZG)
     """
-    print_section("DETERMINISM TEST: Same Query = Same Root (Within Session)")
+    print_section("DETERMINISM TEST: Same Query = Same Merkle Root (Within Session)")
     
     settings = Settings()
     security = SecurityMiddleware()

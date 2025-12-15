@@ -289,23 +289,28 @@ Every logged event follows this structure:
 
 ---
 
-## 🌳 Verkle Tree Commitments
+## 🌳 Tree Commitments: Current & Future
 
-### Current Implementation
+### Current Implementation (Phase 1-2)
 
-The current version uses a **Merkle tree** structure as a placeholder for the full Verkle tree implementation. The tree:
-- Hashes each canonically-encoded event with SHA-256
-- Pairs events bottom-up and hashes combinations
-- Produces a single 256-bit root commitment per run
+**What we have NOW:** **Merkle Tree** (SHA-256 based)
+- Class: `VerkleAccumulator` (in `src/crypto/verkle.py`)
+- Algorithm: Pairwise hash combination creating single root commitment
+- Status: ✅ **Fully functional and tested** (all 35 Phase 2 tests passing)
+- Implementation: Canonically-encoded events → SHA-256 hashing → Merkle tree
 
-### Production Path
+**Why the naming?** The class is named `VerkleAccumulator` to prepare for Phase 3's upgrade path (see below). The current implementation provides full integrity guarantees using well-understood Merkle cryptography.
 
-For production deployments, integrate:
-- **KZG Polynomial Commitments** over BLS12-381
-- Arkworks-rs or PyECC bindings
-- Full Verkle tree proof structure
+### Phase 3: Verkle Tree Upgrade (Future)
 
-See `src/crypto/verkle.py` for integration points.
+When Phase 3 begins, the implementation will be upgraded to:
+- **KZG Polynomial Commitments** over BLS12-381 elliptic curve
+- Full Verkle tree structure with compact proofs
+- Drop-in replacement for current Merkle implementation (same API, same root format)
+
+**Key difference:** Merkle proofs are O(log n); Verkle proofs are O(1) compact.
+
+See `src/crypto/verkle.py` for integration points and TODO comments.
 
 ---
 

@@ -30,7 +30,7 @@
 - RFC 8785 canonical JSON encoder
 - Unicode NFC normalization
 - Non-finite float rejection
-- Merkle tree accumulator (foundation for Phase 3 Verkle upgrade)
+- **Merkle tree accumulator** (Phase 1-2: fully functional | Phase 3: will upgrade to Verkle with KZG)
 - Counter validation
 - Root commitment generation
 - Base64 encoding
