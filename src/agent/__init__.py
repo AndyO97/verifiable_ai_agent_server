@@ -198,11 +198,18 @@ class AIAgent:
                         # Record tool output
                         self.integrity.record_tool_output(tool_call.tool_name, tool_result)
                 
-                # Add tool results to conversation and loop
+                # Add assistant response to conversation for next turn
                 conversation_history.append({
                     "role": "assistant",
                     "content": llm_response.text
                 })
+                
+                # If tools were called, add a message indicating they were processed
+                if llm_response.tool_calls:
+                    conversation_history.append({
+                        "role": "user",
+                        "content": "Tools have been executed. Please continue or provide final answer."
+                    })
             
             # Fallback if we hit max turns
             if final_output is None:

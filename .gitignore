@@ -45,6 +45,7 @@ uv.lock
 .coverage
 htmlcov/
 .tox/
+test_sc*.py
 
 # Environment
 .env

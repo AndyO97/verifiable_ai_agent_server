@@ -36,6 +36,24 @@ class OllamaSettings(BaseSettings):
     
     class Config:
         env_prefix = "OLLAMA_"
+        env_file = ".env"
+        case_sensitive = False
+        extra = "ignore"  # Ignore extra fields from .env
+
+
+class OpenRouterSettings(BaseSettings):
+    """OpenRouter.ai LLM settings"""
+    api_key: Optional[str] = None  # From OPENROUTER_API_KEY env var
+    model: str = "mistralai/mistral-7b-instruct:free"  # Free Mistral 7B model
+    base_url: str = "https://openrouter.ai/api/v1"
+    temperature: float = 0.3  # Lower temperature for more deterministic behavior
+    max_tokens: int = 4000  # Increased for better tool call generation
+    
+    class Config:
+        env_prefix = "OPENROUTER_"
+        env_file = ".env"
+        case_sensitive = False
+        extra = "ignore"  # Ignore extra fields from .env
 
 
 class S3Settings(BaseSettings):
@@ -88,8 +106,9 @@ class Settings(BaseSettings):
     local_storage: LocalStorageSettings = LocalStorageSettings()
     s3: Optional[S3Settings] = None
     
-    # LLM
+    # LLM (choose one: ollama or openrouter)
     ollama: OllamaSettings = OllamaSettings()
+    openrouter: OpenRouterSettings = OpenRouterSettings()
     
     # Observability
     langfuse: LangfuseSettings = LangfuseSettings()
