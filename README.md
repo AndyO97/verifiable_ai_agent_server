@@ -89,48 +89,58 @@ mypy src/
 deactivate
 ```
 
-### Ollama Setup (For LLM Integration)
+### LLM Configuration (OpenRouter or Ollama)
 
-For real LLM workload validation, follow the **OLLAMA_SETUP_GUIDE.txt** (5 simplified sections) for:
-1. Installing Ollama
-2. Pulling a model (recommended: `mistral`)
+The project supports two LLM providers. Choose one:
+
+#### Option 1: OpenRouter.ai (⭐ RECOMMENDED - No local setup)
+
+**Setup** (2 minutes):
+
+1. Get free API key: https://openrouter.ai/keys
+2. Edit `.env` file:
+   ```bash
+   OPENROUTER_API_KEY=sk-or-YOUR_API_KEY_HERE
+   ```
+3. Run validation:
+   ```powershell
+   $env:PYTHONPATH = "."; python examples/validate_phase2.py
+   ```
+
+**Benefits:**
+- ✅ Free tier (Mistral 7B included, no credit card)
+- ✅ No local GPU/memory required
+- ✅ Cloud-based inference
+- ✅ Your PC focuses on agent logic
+- ✅ Instant setup (no downloads or installation)
+
+#### Option 2: Ollama (Local alternative)
+
+For local inference instead, see **OLLAMA_SETUP_GUIDE.txt** (5 simplified sections) for:
+1. Installing Ollama from https://ollama.ai/download
+2. Pulling a model (recommended: `mistral` - ~4GB, 5-10 min)
 3. Testing connection with diagnostics
-4. Running Phase 2 validation
+4. Running validation with real LLM workloads
 
-**Quick Start Commands:**
-
+**Quick Start:**
 ```powershell
-# Step 1: Download and install Ollama from https://ollama.ai/download
-# Then pull a model
+# 1. Download and install Ollama
+# 2. Pull a model
 ollama pull mistral
 
-# Step 2: Verify Ollama is running and model is loaded
-ollama list
-
-# Step 3: Test Ollama connection with diagnostics
-$env:PYTHONPATH = "."; python examples/ollama_diagnostics.py
-
-# Expected output should show [OK] for all checks:
-# [OK] Ollama Server
-# [OK] Models Available
-# [OK] Generate Endpoint Test
-# [SUCCESS] Ollama is ready!
-
-# Step 4: Run Phase 2 validation with real LLM workloads
+# 3. Run validation
 $env:PYTHONPATH = "."; python examples/validate_phase2.py
 
-# Expected output: All 4 scenarios passing + determinism test passing
+# To force Ollama when OpenRouter API key is set:
+$env:USE_OLLAMA = "1"; python examples/validate_phase2.py
 ```
 
 **Troubleshooting Ollama Connection:**
-
 ```powershell
-# Check if Ollama service is running
+# Check if Ollama is running
 curl http://localhost:11434/api/tags
 
-# Should return: {"models":[{"name":"mistral",...}]} or empty list if no models
-
-# If connection fails, start Ollama manually
+# Start Ollama if needed
 ollama serve
 
 # Verify model is loaded

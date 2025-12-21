@@ -1,12 +1,19 @@
 # 🎉 Project Summary: Verifiable AI Agent Server
 
-> **Quick Ollama Setup**: Refer to `OLLAMA_SETUP_GUIDE.txt` (simplified to 5 sections) for installing and configuring Ollama for real workload validation.
+> **Quick LLM Setup**: Choose one option below:
 >
-> **Quick Test Commands**:
+> **Option 1: OpenRouter.ai (Recommended - No setup required):**
 > ```powershell
-> ollama pull mistral                                    # Download model (~4GB, 5-10 min)
-> $env:PYTHONPATH = "."; python examples/ollama_diagnostics.py  # Test connection
-> $env:PYTHONPATH = "."; python examples/validate_phase2.py     # Run all Phase 2 tests
+> # 1. Get API key: https://openrouter.ai/keys
+> # 2. Edit .env: OPENROUTER_API_KEY=sk-or-YOUR_KEY
+> # 3. Run tests
+> $env:PYTHONPATH = "."; python examples/validate_phase2.py
+> ```
+>
+> **Option 2: Ollama (Local alternative - See OLLAMA_SETUP_GUIDE.txt):**
+> ```powershell
+> ollama pull mistral
+> $env:PYTHONPATH = "."; python examples/validate_phase2.py
 > ```
 
 ## 📊 Overview
