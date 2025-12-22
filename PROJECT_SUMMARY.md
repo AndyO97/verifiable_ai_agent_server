@@ -23,7 +23,7 @@
 | **Total Files** | 24 |
 | **Lines of Code** | ~3,500+ |
 | **Python Modules** | 14 |
-| **Test Cases** | 71 (all passing ✅) |
+| **Test Cases** | 103 (all passing ✅) |
 | **Documentation Files** | 2 (README, PROJECT_SUMMARY) |
 | **Phase Status** | Phase 2 ✅ Complete | Phase 3 🚀 In Progress - KZG Commitments Implemented |
 
@@ -32,8 +32,8 @@
 ## 🚀 Phase 3: Production-Grade Cryptography (In Progress)
 
 **Status**: Started December 22, 2025  
-**Current**: Task 1-2 ✅ Completed | Task 3 ✅ Completed  
-**Progress**: 3/9 major tasks complete
+**Current**: Task 1-3 ✅ Completed | Task 4 ✅ Completed  
+**Progress**: 4/9 major tasks complete
 
 ### What's New in Phase 3?
 
@@ -50,7 +50,7 @@ Phase 3 transitions from **Merkle trees** to **Verkle trees with KZG polynomial 
 | 1. KZG Commitments | ✅ Complete | 5 | Cryptographic core |
 | 2. Verkle Refactor | ✅ Complete | 3 | Tree structure upgrade |
 | 3. PostgreSQL Counter | ✅ Complete | 3 | Security hardening |
-| 4. Langfuse Deploy | ⏳ Planned | 4 | Observability |
+| 4. Langfuse Deploy | ✅ Complete | 4 | Observability |
 | 5. OTel Spans | ⏳ Planned | 4 | Trace visibility |
 | 6. Latency Benchmarks | ⏳ Planned | 3 | Performance validation |
 | 7. Verification CLI | ⏳ Planned | 3 | Public verification |
@@ -122,6 +122,65 @@ class SessionCounter(Base):
 - Get/reset operations (2 tests)
 - Factory function with env vars (2 tests)
 - SQLAlchemy model validation (3 tests)
+
+### Langfuse Self-Hosted Deployment ✅
+
+**Files**: 
+- `docker-compose.yml` (Langfuse + PostgreSQL orchestration)
+- `src/observability/langfuse_client.py` (Client library)
+- `LANGFUSE_SETUP_GUIDE.md` (Comprehensive deployment guide)
+
+```python
+class LangfuseClient:
+    """Trace collection and cost tracking for Langfuse"""
+    
+    def create_trace(self, name: str, metadata: dict) -> str:
+        """Create trace with session/counter/timestamp metadata"""
+    
+    def record_llm_call(self, trace_id: str, model, prompt, response,
+                       input_tokens, output_tokens, cost):
+        """Record LLM API call with cost tracking"""
+    
+    def record_tool_call(self, trace_id: str, tool_name, input_data,
+                        output_data, duration_ms, success):
+        """Record tool invocation with execution metadata"""
+    
+    def record_integrity_check(self, trace_id: str, counter, commitment,
+                              events_count, verified):
+        """Record integrity verification with commitment"""
+    
+    def get_session_summary(self) -> dict:
+        """Get session statistics (traces, events, total cost)"""
+```
+
+**Deployment**:
+```bash
+# Quick start
+docker-compose up -d
+
+# Dashboard: http://localhost:3000
+# OTLP Receiver: localhost:4317
+```
+
+**Features**:
+- Docker Compose deployment (PostgreSQL + Langfuse server)
+- Cost tracking per trace and session
+- Event aggregation (LLM calls, tool invocations, integrity checks)
+- Session-level trace grouping
+- OTLP gRPC integration for OpenTelemetry spans
+- Comprehensive monitoring and backup guides
+
+**Tests**: 32 Langfuse tests ✅ PASSING
+- Client initialization (2 tests)
+- Trace creation with metadata (5 tests)
+- Event recording and timestamping (5 tests)
+- LLM call tracking and cost accumulation (4 tests)
+- Tool call recording (success/failure) (3 tests)
+- Integrity check recording (3 tests)
+- Trace finalization (3 tests)
+- Session summary statistics (3 tests)
+- Factory function (3 tests)
+- Complete workflow integration (1 test)
 
 ---
 
