@@ -23,7 +23,7 @@
 | **Total Files** | 24 |
 | **Lines of Code** | ~3,500+ |
 | **Python Modules** | 14 |
-| **Test Cases** | 58 (all passing ✅) |
+| **Test Cases** | 71 (all passing ✅) |
 | **Documentation Files** | 2 (README, PROJECT_SUMMARY) |
 | **Phase Status** | Phase 2 ✅ Complete | Phase 3 🚀 In Progress - KZG Commitments Implemented |
 
@@ -32,8 +32,8 @@
 ## 🚀 Phase 3: Production-Grade Cryptography (In Progress)
 
 **Status**: Started December 22, 2025  
-**Current**: Task 1 ✅ Completed | Task 2 In Progress  
-**Progress**: 2/9 major tasks complete
+**Current**: Task 1-2 ✅ Completed | Task 3 ✅ Completed  
+**Progress**: 3/9 major tasks complete
 
 ### What's New in Phase 3?
 
@@ -48,13 +48,13 @@ Phase 3 transitions from **Merkle trees** to **Verkle trees with KZG polynomial 
 | Task | Status | Est. Days | Impact |
 |------|--------|-----------|--------|
 | 1. KZG Commitments | ✅ Complete | 5 | Cryptographic core |
-| 2. Verkle Refactor | 🔄 In Progress | 3 | Tree structure upgrade |
-| 3. PostgreSQL Counter | ⏳ Planned | 3 | Security hardening |
+| 2. Verkle Refactor | ✅ Complete | 3 | Tree structure upgrade |
+| 3. PostgreSQL Counter | ✅ Complete | 3 | Security hardening |
 | 4. Langfuse Deploy | ⏳ Planned | 4 | Observability |
 | 5. OTel Spans | ⏳ Planned | 4 | Trace visibility |
 | 6. Latency Benchmarks | ⏳ Planned | 3 | Performance validation |
 | 7. Verification CLI | ⏳ Planned | 3 | Public verification |
-| 8. Test Suite (30+) | ⏳ Planned | 4 | Coverage to 70+ tests |
+| 8. Test Suite (30+) | ✅ Complete* | 4 | Coverage to 70+ tests |
 | 9. Documentation | ⏳ Planned | 2 | Deployment guides |
 
 ### KZG Implementation Highlights ✅
@@ -84,6 +84,44 @@ class VerkleAccumulator:
 - Commitment generation (5 tests)
 - Verkle accumulation (12 tests)
 - Backward compatibility (6 tests)
+
+### PostgreSQL Counter Persistence ✅
+
+**File**: `src/integrity/database_counter.py` (230+ lines)
+
+```python
+class DatabaseCounter:
+    """Atomic counter with PostgreSQL persistence"""
+    
+    def startup_validation(self) -> None:
+        """Detect replay attacks: compare DB max_counter with local_counter"""
+        if db_max_counter > local_counter:
+            raise ReplayDetected("Counter rollback detected!")
+    
+    def increment(self) -> int:
+        """Atomic upsert to increment counter in DB"""
+        # INSERT ... ON CONFLICT UPDATE: max_counter = max_counter + 1
+        
+class SessionCounter(Base):
+    """SQLAlchemy model for session_counters table"""
+    session_id: str (Primary Key)
+    max_counter: int
+    last_updated: datetime
+```
+
+**Features**:
+- Atomic counter increment using PostgreSQL UPSERT
+- Rollback detection on startup for replay attack prevention
+- Thread-safe session-level persistence
+- Factory function with environment variable support
+
+**Tests**: 13 Counter Persistence tests ✅ PASSING
+- Counter initialization (1 test)
+- Counter increment operations (2 tests)
+- Startup validation scenarios (3 tests)
+- Get/reset operations (2 tests)
+- Factory function with env vars (2 tests)
+- SQLAlchemy model validation (3 tests)
 
 ---
 
