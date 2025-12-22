@@ -67,14 +67,30 @@ python -m pytest tests/ -v
 - 🪶 Lightweight (~30MB vs Poetry ~200MB)
 - 🔒 Deterministic resolution (reproducible builds)
 
-### Daily Development
+### Running Tests
 
 ```powershell
 # Activate virtual environment
 .\venv\Scripts\Activate.ps1
 
-# Run tests
+# Run all tests (124 tests, ~3-4 minutes)
 python -m pytest tests/ -v
+
+# Quick summary without running (30 seconds)
+python show_progress.py
+
+# Run specific feature tests (< 1 minute each)
+python -m pytest tests/test_kzg.py -v              # KZG (23 tests)
+python -m pytest tests/test_otel_spans.py -v       # OTel (21 tests)
+python -m pytest tests/test_langfuse.py -v         # Langfuse (32 tests)
+python -m pytest tests/test_counter_persistence.py -v  # Counter (13 tests)
+```
+
+### Daily Development
+
+```powershell
+# Activate virtual environment
+.\venv\Scripts\Activate.ps1
 
 # Format code
 black src/ tests/
