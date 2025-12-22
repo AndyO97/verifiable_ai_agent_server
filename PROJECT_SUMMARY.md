@@ -23,9 +23,9 @@
 | **Total Files** | 24 |
 | **Lines of Code** | ~3,500+ |
 | **Python Modules** | 14 |
-| **Test Cases** | 103 (all passing ✅) |
-| **Documentation Files** | 2 (README, PROJECT_SUMMARY) |
-| **Phase Status** | Phase 2 ✅ Complete | Phase 3 🚀 In Progress - KZG Commitments Implemented |
+| **Test Cases** | 124 (all passing ✅) |
+| **Documentation Files** | 5 (README, PROJECT_SUMMARY, LANGFUSE_SETUP, OTEL_INSTRUMENTATION, PRD) |
+| **Phase Status** | Phase 2 ✅ Complete | Phase 3 🚀 5/9 Tasks Complete (KZG, Verkle, Counter, Langfuse, OTel) |
 
 ---
 
@@ -51,10 +51,10 @@ Phase 3 transitions from **Merkle trees** to **Verkle trees with KZG polynomial 
 | 2. Verkle Refactor | ✅ Complete | 3 | Tree structure upgrade |
 | 3. PostgreSQL Counter | ✅ Complete | 3 | Security hardening |
 | 4. Langfuse Deploy | ✅ Complete | 4 | Observability |
-| 5. OTel Spans | ⏳ Planned | 4 | Trace visibility |
+| 5. OTel Spans | ✅ Complete | 4 | Trace visibility |
 | 6. Latency Benchmarks | ⏳ Planned | 3 | Performance validation |
 | 7. Verification CLI | ⏳ Planned | 3 | Public verification |
-| 8. Test Suite (30+) | ✅ Complete* | 4 | Coverage to 70+ tests |
+| 8. Test Suite (30+) | ✅ Complete* | 4 | Coverage to 124+ tests |
 | 9. Documentation | ⏳ Planned | 2 | Deployment guides |
 
 ### KZG Implementation Highlights ✅
@@ -181,6 +181,82 @@ docker-compose up -d
 - Session summary statistics (3 tests)
 - Factory function (3 tests)
 - Complete workflow integration (1 test)
+
+### OpenTelemetry Span Integration ✅
+
+**Files**:
+- `src/observability/__init__.py` (Enhanced SpanManager - 350+ lines added)
+- `OTEL_INSTRUMENTATION_GUIDE.md` (900+ lines comprehensive guide)
+- `tests/test_otel_spans.py` (21 test cases)
+
+**Enhanced SpanManager Methods**:
+```python
+class SpanManager:
+    """Hierarchical span management with automatic duration measurement"""
+    
+    # Root span
+    def start_run_span(session_id: str) -> Span
+        """Start agent run root span with service metadata"""
+    
+    # Metadata setting
+    def set_integrity_metadata(span, session_id, counter, timestamp)
+        """Set integrity-related attributes (counter, timestamp)"""
+    
+    def set_verkle_root(span, root_b64)
+        """Set Verkle commitment root on span (48 bytes)"""
+    
+    # Span creation (context managers)
+    def start_llm_span() -> ContextManager[Span]
+        """LLM API call span with model/tokens/cost attributes"""
+    
+    def start_tool_span(tool_name: str) -> ContextManager[Span]
+        """Tool execution span with success/error tracking"""
+    
+    def start_verification_span() -> ContextManager[Span]
+        """Integrity verification span with commitment/counter"""
+    
+    def start_counter_span() -> ContextManager[Span]
+        """Counter increment operation span"""
+    
+    # Attribute recording
+    def record_llm_call(span, model, input_tokens, output_tokens, cost)
+    def record_tool_call(span, tool_name, success, error_message=None)
+    def record_verification(span, counter, commitment, verified, events_count)
+    def record_counter_increment(span, counter_value, session_id)
+    
+    # Error handling
+    def set_span_status_success(span)
+    def set_span_status_error(span, error_message)
+```
+
+**Features**:
+- Hierarchical span management with parent-child relationships
+- Automatic span duration measurement via context managers
+- Root span tracking (`self.root_span`, `self.active_spans`)
+- Full OTel attribute support (strings, numbers, booleans, arrays)
+- Structured logging via structlog integration
+- Optional OTel graceful degradation (OTEL_AVAILABLE flag)
+
+**Documentation (OTEL_INSTRUMENTATION_GUIDE.md)**:
+- Quick start examples with code
+- Span hierarchy visualization diagram
+- Complete attribute reference tables
+- Agent workflow integration example
+- Langfuse dashboard viewing guide with waterfall diagrams
+- Error handling patterns (try/catch span status)
+- Performance optimization tips
+- Troubleshooting guide
+
+**Tests**: 21 OTel span tests ✅ PASSING
+- SpanManager initialization (2 tests)
+- Integrity metadata setting (2 tests)
+- LLM span creation and recording (3 tests)
+- Tool span creation and success/failure recording (4 tests)
+- Verification span creation and recording (3 tests)
+- Counter span creation and recording (2 tests)
+- Span status management (success/error) (2 tests)
+- Complete integration scenario (1 test)
+- Context manager behavior (2 tests)
 
 ---
 
