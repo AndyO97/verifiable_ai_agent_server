@@ -15,6 +15,8 @@ dependencies = [
     "fastmcp>=0.1.0",
     # Cryptography
     "pycryptodome>=3.19.0",
+    # KZG commitments & BLS12-381 (Phase 3)
+    "py-ecc>=6.0.0",
     # Serialization & canonical encoding
     "msgpack>=1.0.0",
     "json-canonicalize>=0.1.0",

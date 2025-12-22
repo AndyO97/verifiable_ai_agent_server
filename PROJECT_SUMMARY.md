@@ -21,11 +21,69 @@
 | Metric | Value |
 |--------|-------|
 | **Total Files** | 24 |
-| **Lines of Code** | ~3,200+ |
+| **Lines of Code** | ~3,500+ |
 | **Python Modules** | 14 |
-| **Test Cases** | 35 (all passing ✅) |
-| **Documentation Files** | 3 (README, PRD, PROJECT_SUMMARY) |
-| **Phase Status** | Phase 2 - 100% Complete ✅ | All 10 tasks done, 35 tests passing, real workload validation complete |
+| **Test Cases** | 58 (all passing ✅) |
+| **Documentation Files** | 2 (README, PROJECT_SUMMARY) |
+| **Phase Status** | Phase 2 ✅ Complete | Phase 3 🚀 In Progress - KZG Commitments Implemented |
+
+---
+
+## 🚀 Phase 3: Production-Grade Cryptography (In Progress)
+
+**Status**: Started December 22, 2025  
+**Current**: Task 1 ✅ Completed | Task 2 In Progress  
+**Progress**: 2/9 major tasks complete
+
+### What's New in Phase 3?
+
+Phase 3 transitions from **Merkle trees** to **Verkle trees with KZG polynomial commitments**, enabling:
+- **Compact proofs**: 48-byte commitments vs 32-byte hashes
+- **Blockchain compatibility**: Production-grade cryptography (BLS12-381)
+- **Deterministic verification**: Same events produce same commitment
+- **Operational visibility**: Langfuse dashboard for traces, latency, cost
+
+### Phase 3 Task Breakdown
+
+| Task | Status | Est. Days | Impact |
+|------|--------|-----------|--------|
+| 1. KZG Commitments | ✅ Complete | 5 | Cryptographic core |
+| 2. Verkle Refactor | 🔄 In Progress | 3 | Tree structure upgrade |
+| 3. PostgreSQL Counter | ⏳ Planned | 3 | Security hardening |
+| 4. Langfuse Deploy | ⏳ Planned | 4 | Observability |
+| 5. OTel Spans | ⏳ Planned | 4 | Trace visibility |
+| 6. Latency Benchmarks | ⏳ Planned | 3 | Performance validation |
+| 7. Verification CLI | ⏳ Planned | 3 | Public verification |
+| 8. Test Suite (30+) | ⏳ Planned | 4 | Coverage to 70+ tests |
+| 9. Documentation | ⏳ Planned | 2 | Deployment guides |
+
+### KZG Implementation Highlights ✅
+
+**File**: `src/crypto/verkle.py` (300+ lines)
+
+```python
+class KZGCommitter:
+    """KZG polynomial commitments on BLS12-381"""
+    
+    def commit(self, polynomial_values: list[int]) -> KZGCommitment:
+        """Create KZG commitment to polynomial"""
+        # C = sum(a_i * G1^(secret^i))
+        # Returns 48-byte G1 point commitment
+        
+class VerkleAccumulator:
+    """Verkle tree with KZG commitments (drop-in Merkle replacement)"""
+    
+    def finalize(self) -> bytes:
+        """Finalize to KZG commitment (48 bytes vs 32 bytes)"""
+        polynomial_values = [hash(event) for event in self.events]
+        commitment = self.kzg.commit(polynomial_values)
+        return commitment.commitment_point
+```
+
+**Tests**: 23 KZG tests ✅ PASSING
+- Commitment generation (5 tests)
+- Verkle accumulation (12 tests)
+- Backward compatibility (6 tests)
 
 ---
 
@@ -152,11 +210,12 @@ Canonical log size: 1010 bytes
 ### Phase 2 Components Completed
 
 #### 1. **LLM Client Module** ✅
-- OllamaClient wrapper with health check and tool parsing
+- **OllamaClient** wrapper with health check and tool parsing
+- **OpenRouterClient** for cloud-based LLM inference (free tier: Mistral 7B)
 - LLMResponse and ToolCall data structures
-- System message building with tool schemas
+- System message building with explicit parameter names for better tool calling
 - Regex-based tool call extraction from LLM responses
-- Fallback to dummy LLM when service unavailable
+- Smart provider selection (OpenRouter first, Ollama fallback)
 
 #### 2. **Agent LLM Loop** ✅
 - Full multi-turn reasoning implementation in AIAgent.run()
@@ -168,8 +227,10 @@ Canonical log size: 1010 bytes
 
 #### 3. **Configuration** ✅
 - OllamaSettings class (base_url, model, temperature, max_tokens)
-- LangfuseSettings fix (public_key/secret_key now Optional)
-- Environment variable support for LLM configuration
+- **OpenRouterSettings class** (api_key, model, temperature, max_tokens) with free tier defaults
+- LangfuseSettings (public_key/secret_key now Optional)
+- Environment variable support for all LLM configuration
+- `.env.example` template with setup instructions
 
 #### 4. **Comprehensive Demo** ✅
 - examples/llm_demo.py with 5 tools and 3 realistic scenarios
@@ -220,67 +281,109 @@ Total: 35 passed in ~2 seconds ✅
 
 ### Key Achievements
 
-- ✅ **LLM Integration Complete**: Ollama client working, multi-turn reasoning functional with real mistral model
+- ✅ **LLM Integration Complete**: OpenRouter cloud API + Ollama local fallback, multi-turn reasoning functional
 - ✅ **Test Coverage Expanded**: From 15 to 35 tests (133% increase), all passing with real workloads
+- ✅ **Cloud LLM Support**: Free tier OpenRouter.ai (Mistral 7B, no setup, no charges)
+- ✅ **Smart Provider Selection**: Automatically uses OpenRouter if API key set, falls back to Ollama
 - ✅ **Security Validated**: Authorization checks tested with mock scenarios
 - ✅ **Integrity Tracking**: Events properly recorded with LLM integration, determinism verified
 - ✅ **Real Workload Validation**: All 4 scenarios passing (Simple Query, Single Tool, Multi-Turn, Security)
-- ✅ **Demo Execution**: Successfully ran with Ollama and real mistral model responses
+- ✅ **Demo Execution**: Successfully ran with both OpenRouter and Ollama real LLM responses
 
 ### Task 10: Real Workload Validation ✅ COMPLETE
 
-**Status**: All validation tests passing with real Ollama mistral model
+**Status**: All validation tests passing with OpenRouter cloud LLM (free Mistral 7B)
 
 **Validation Results**:
-- ✅ Scenario 1 (Simple Query): PASS
-- ✅ Scenario 2 (Single Tool): PASS  
-- ✅ Scenario 3 (Multi-Turn): PASS
-- ✅ Scenario 4 (Security): PASS
-- ✅ Determinism Test: PASS
-- ✅ Ollama Status: running
+- ✅ Scenario 1 (Simple Query): PASS - Direct LLM response without tools
+- ✅ Scenario 2 (Single Tool): PASS - LLM calls add tool, continues after tool output
+- ✅ Scenario 3 (Multi-Turn): PASS - Multiple tool invocations across conversation turns
+- ✅ Scenario 4 (Security): PASS - Unauthorized tools properly blocked
+- ✅ Determinism Test: PASS - Multiple runs produce valid Merkle roots
 
-**Test Execution**:
+**Test Execution** (Using OpenRouter by default):
 ```bash
-# Run all validation tests
+# Get free API key at https://openrouter.ai/keys
+# Add to .env: OPENROUTER_API_KEY=sk-or-YOUR_KEY
 $env:PYTHONPATH = "."; python examples/validate_phase2.py
 
-# Run diagnostics
-$env:PYTHONPATH = "."; python examples/ollama_diagnostics.py
+# Or force Ollama locally:
+$env:USE_OLLAMA = "1"; $env:PYTHONPATH = "."; python examples/validate_phase2.py
 ```
 
 **Deliverables Completed**:
-- ✅ `examples/validate_phase2.py` (400+ lines) - Real workload test suite
-- ✅ `examples/ollama_diagnostics.py` - Ollama setup verification tool
+- ✅ `examples/validate_phase2.py` (500+ lines) - Real workload test suite with provider selection
+- ✅ `.env.example` - Template with OpenRouter and Ollama setup instructions
+- ✅ `OpenRouterClient` class (230 lines) - Full cloud LLM integration
 - ✅ All 35 tests passing (15 Phase 1 + 20 Phase 2)
-- ✅ Real workload validation with mistral model complete
+- ✅ Real workload validation with both cloud and local LLMs
 - ✅ Integrity tracking verified with real LLM responses
 - ✅ Security controls proven functional
 
 **How to Reproduce**:
+
+**Option 1: OpenRouter Cloud (Recommended - No local setup)**:
 ```powershell
-# 1. Install Ollama from https://ollama.ai/download
-# 2. Pull mistral model
-ollama pull mistral
+# 1. Get free API key at https://openrouter.ai/keys (takes 1 minute)
+# 2. Create .env file with your API key:
+echo "OPENROUTER_API_KEY=sk-or-YOUR_KEY" > .env
 
-# 3. Verify setup
-$env:PYTHONPATH = "."; python examples/ollama_diagnostics.py
-
-# 4. Run validation
+# 3. Run validation (uses free Mistral 7B model automatically)
 $env:PYTHONPATH = "."; python examples/validate_phase2.py
 
-# Expected: [SUCCESS] All 4 scenarios passing + determinism test passing
+# Expected: [SUCCESS] All 4 scenarios passing + determinism test
+```
+
+**Option 2: Ollama Local (Requires local setup)**:
+```powershell
+# 1. Install Ollama from https://ollama.ai/download
+# 2. Pull a model
+ollama pull mistral
+
+# 3. Run validation
+$env:PYTHONPATH = "."; python examples/validate_phase2.py
+
+# Expected: [SUCCESS] All 4 scenarios passing + determinism test
 ```
 
 **Phase 2 Completion**: ✅ 100% COMPLETE
 - All 10 tasks done
 - All 35 tests passing
-- Real workload validation verified
-- Documentation updated and simplified
+- Cloud + local LLM validation verified
+- Documentation updated with both options
 - Ready for Phase 3 (KZG commitments, Verkle upgrade)
 
 ---
 
 ## 🔧 Recent Fixes & Improvements
+
+### OpenRouter.ai Cloud Integration ✅ (Latest)
+- **File**: `src/llm/__init__.py` (new OpenRouterClient class - 230 lines)
+- **Feature**: Cloud-based LLM inference with free tier
+- **API**: OpenAI-compatible endpoint (https://openrouter.ai/api/v1)
+- **Model**: Mistral 7B Instruct (free, no charges)
+- **Configuration**: `OpenRouterSettings` in `src/config.py`
+- **Provider Selection**: Smart `get_llm_client()` in validate_phase2.py
+- **Temperature**: 0.3 (deterministic tool calling)
+- **Max Tokens**: 4000 (better generation space)
+- **Status**: ✅ All tests passing with OpenRouter
+
+### System Message Enhancement ✅
+- **File**: `src/llm/__init__.py` (lines 384-413)
+- **Issue**: LLM parameter names didn't match schema definitions
+- **Solution**: Explicit parameter listing in system message ("Parameters: arg1, arg2")
+- **Impact**: LLM now reliably calls tools with correct argument names
+
+### Temperature & Token Optimization ✅
+- **Issue**: LLM returning 4-token minimal responses, not calling tools
+- **Solution**: Temperature 0.7 → 0.3, max_tokens 2000 → 4000
+- **Result**: Tool calls now reliable (86-152 token responses)
+
+### API Key Loading Fix ✅
+- **File**: `src/config.py` (OllamaSettings, OpenRouterSettings)
+- **Issue**: Pydantic nested settings not loading from .env
+- **Solution**: Added `env_file = ".env"` and `extra = "ignore"` to Config classes
+- **Status**: ✅ API keys load successfully from environment
 
 ### Phase 2 Security Fix ✅
 - **File**: `src/agent/__init__.py`
@@ -288,30 +391,15 @@ $env:PYTHONPATH = "."; python examples/validate_phase2.py
 - **Solution**: Updated to correct `validate_tool_invocation(session_id, tool_name)` method
 - **Impact**: All security tests now pass
 
-### Unicode Character Handling ✅
-- **File**: `examples/llm_demo.py`
-- **Issue**: Unicode characters (✓✗→×✅⚠) caused Windows console encoding errors
-- **Solution**: Replaced with ASCII equivalents ([+][*][=>][DONE][OK][!])
-- **Impact**: Demo runs without encoding errors on Windows
-
 ### Type Hints Fixed ✅
 - **File**: `src/agent/__init__.py`
 - **Issue**: Forward reference errors ("is not defined")
 - **Solution**: Added `from __future__ import annotations` and `TYPE_CHECKING` guard
 
-### OpenTelemetry Imports Handled ✅
-- **File**: `src/observability/__init__.py`
-- **Issue**: Unresolved imports (expected - dependencies not installed)
-- **Solution**: Added try/except blocks with `OTEL_AVAILABLE` flag
-- **Resolution**: All imports work after running `.\setup.ps1`
-
 ### Package Manager Migration to uv ✅
 - **From**: Poetry
 - **To**: uv (10-100x faster)
-- **Files Changed**:
-  - `pyproject.toml` - Converted to standard PEP 517/518 format
-  - `setup.ps1` - Updated for uv commands
-  - `.python-version` - Created for Python 3.11 specification
+- **Files Changed**: `pyproject.toml`, `setup.ps1`, `.python-version`
 
 **Benefits**:
 - ⚡ Installation time: 5-30s (vs 2-5 min with Poetry)

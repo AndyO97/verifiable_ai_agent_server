@@ -78,7 +78,7 @@ class TestVerkleAccumulator:
         
         root = acc.finalize()
         assert root is not None
-        assert len(root) == 32  # SHA-256 output
+        assert len(root) == 48  # KZG commitment (48 bytes for G1 point on BLS12-381)
     
     def test_verkle_multiple_events(self, session_id):
         """Test accumulating multiple events"""
@@ -119,7 +119,7 @@ class TestVerkleAccumulator:
         # Should be valid Base64
         import base64
         decoded = base64.b64decode(root_b64)
-        assert len(decoded) == 32
+        assert len(decoded) == 48  # KZG commitment (48 bytes for G1 point on BLS12-381)
     
     def test_verkle_counter_validation(self, session_id):
         """Test that counter mismatches are caught"""
