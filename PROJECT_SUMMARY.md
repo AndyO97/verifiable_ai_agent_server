@@ -23,17 +23,17 @@
 | **Total Files** | 24 |
 | **Lines of Code** | ~3,500+ |
 | **Python Modules** | 14 |
-| **Test Cases** | 140 (all passing ✅) |
-| **Documentation Files** | 5 (README, PROJECT_SUMMARY, LANGFUSE_SETUP, PRD, LATENCY_RESULTS) |
-| **Phase Status** | Phase 2 ✅ Complete | Phase 3 🚀 6/9 Tasks Complete (KZG, Verkle, Counter, Langfuse, OTel, Latency) |
+| **Test Cases** | 158 (all passing ✅) |
+| **Documentation Files** | 6 (README, PROJECT_SUMMARY, LANGFUSE_SETUP, VERIFY_CLI_GUIDE, PRD, LATENCY_RESULTS) |
+| **Phase Status** | Phase 2 ✅ Complete | Phase 3 🚀 7/9 Tasks Complete (KZG, Verkle, Counter, Langfuse, OTel, Latency, VerifyCLI) |
 
 ---
 
 ## 🚀 Phase 3: Production-Grade Cryptography (In Progress)
 
 **Status**: Started December 22, 2025  
-**Current**: Task 1-5 ✅ Completed | Task 6 ✅ Completed  
-**Progress**: 6/9 major tasks complete (67%)
+**Current**: Task 1-6 ✅ Completed | Task 7 ✅ Completed  
+**Progress**: 7/9 major tasks complete (78%)
 
 ### What's New in Phase 3?
 
@@ -42,6 +42,7 @@ Phase 3 transitions from **Merkle trees** to **Verkle trees with KZG polynomial 
 - **Blockchain compatibility**: Production-grade cryptography (BLS12-381)
 - **Deterministic verification**: Same events produce same commitment
 - **Operational visibility**: Langfuse dashboard for traces, latency, cost
+- **Public verification**: CLI tool for third-party integrity validation
 
 ### Phase 3 Task Breakdown
 
@@ -53,8 +54,8 @@ Phase 3 transitions from **Merkle trees** to **Verkle trees with KZG polynomial 
 | 4. Langfuse Deploy | ✅ Complete | 4 | Observability |
 | 5. OTel Spans | ✅ Complete | 4 | Trace visibility |
 | 6. Latency Benchmarks | ✅ Complete | 3 | Performance validation |
-| 7. Verification CLI | ⏳ Planned | 3 | Public verification |
-| 8. Test Suite (30+) | ✅ Complete* | 4 | Coverage to 140+ tests |
+| 7. Verification CLI | ✅ Complete | 3 | Public verification |
+| 8. Test Suite (30+) | ✅ Complete* | 4 | Coverage to 158+ tests |
 | 9. Documentation | ⏳ Planned | 2 | Deployment guides |
 
 ### KZG Implementation Highlights ✅
@@ -257,6 +258,73 @@ class SpanManager:
 - Span status management (success/error) (2 tests)
 - Complete integration scenario (1 test)
 - Context manager behavior (2 tests)
+
+### Verification CLI (Public Tool) ✅
+
+**File**: `src/tools/verify_cli.py` (350+ lines)  
+**Documentation**: `VERIFY_CLI_GUIDE.md` (Comprehensive guide with examples)
+
+**Three Main Commands**:
+
+```python
+# 1. Verify: Reconstruct and verify agent run integrity
+verify <log_file> <root_b64> [--expected-hash <hash>] [--verbose]
+
+# 2. Extract: Display log metadata without verification
+extract <log_file>
+
+# 3. Export Proof: Generate audit-ready verification proofs
+export-proof <log_file> <root_b64> [--output <path>] [--include-events] [--include-log]
+```
+
+**Features**:
+- Reconstructs Verkle tree from canonical JSON log
+- Verifies KZG commitment matches events
+- SHA-256 hash validation (optional)
+- Event count and counter validation
+- Exports JSON proofs with metadata
+- Optional event summaries and full log inclusion
+- Detailed error messages with suggestions
+- Exit codes for CI/CD integration
+
+**Verify Workflow**:
+1. Load canonical log from file
+2. Verify hash if provided (detect tampering)
+3. Parse events and validate counters
+4. Reconstruct Verkle tree using KZG commitments
+5. Compare computed root with expected
+6. Report PASSED/FAILED with details
+
+**Use Cases**:
+- Real-time post-run verification
+- Audit trail generation
+- Batch verification scripts
+- Public transparency (publish proofs)
+- CI/CD integration
+
+**Example Usage**:
+
+```bash
+# Verify a run
+python -m src.tools.verify_cli verify ./logs/run.json "CtF/sK3Mj93lu7eXLCOFqwlAOsTP..." --verbose
+
+# Extract metadata
+python -m src.tools.verify_cli extract ./logs/run.json
+
+# Create audit proof
+python -m src.tools.verify_cli export-proof ./logs/run.json "CtF/sK3Mj93lu7eXLCOFqwlAOsTP..." \
+  --output proof.json --include-events
+```
+
+**Tests**: 16 CLI tests ✅ PASSING
+- Verify with valid commitment (1 test)
+- Verify with hash validation (1 test)
+- Verify with wrong hash/root (2 tests)
+- Error handling: nonexistent file, invalid JSON, invalid Base64 (3 tests)
+- Verbose mode output (1 test)
+- Extract metadata (3 tests)
+- Export proof basic and options (4 tests)
+- Full workflow integration (1 test)
 
 ---
 

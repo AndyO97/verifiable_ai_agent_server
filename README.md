@@ -340,13 +340,111 @@ See `src/crypto/verkle.py` for integration points and TODO comments.
 
 ---
 
-## 🔍 Verification
+## 🔍 Verification CLI (Phase 3 ✅ Complete)
 
-### Verify a Run Locally
+The **Verification CLI** provides public, third-party verification of agent run integrity without requiring server access.
 
+### Three Commands
+
+#### 1. **Verify** - Validate run integrity
 ```bash
-poetry run verify <canonical_log_path> <expected_root_b64> --hash <expected_hash>
+python -m src.tools.verify_cli verify <log_file> <root_b64> [--expected-hash <hash>] [--verbose]
 ```
+
+Reconstructs the Verkle tree and confirms the root commitment matches.
+
+**Example:**
+```powershell
+$env:PYTHONPATH = "."; python -m src.tools.verify_cli verify ./logs/run.json "CtF/sK3Mj93lu7eXLCOFqwlAOsTP..." --verbose
+```
+
+**Output on success:**
+```
+✓ Verification PASSED ✓
+  Root matches: CtF/sK3Mj93lu7eX...
+  Events verified: 4
+```
+
+#### 2. **Extract** - Show run metadata without verification
+```bash
+python -m src.tools.verify_cli extract <log_file>
+```
+
+Displays session ID, event count, event types, timestamps, and log hash.
+
+**Example:**
+```powershell
+$env:PYTHONPATH = "."; python -m src.tools.verify_cli extract ./logs/run.json
+```
+
+**Output:**
+```
+Session ID:        test_session_1
+Event Count:       4
+File Size:         641 bytes
+SHA-256 Hash:      d4fd76612a9b79bdc5...
+Counter Range:     0 → 3
+Event Types:
+  agent_started........ 1 events
+  tool_call............ 1 events
+  llm_response......... 1 events
+  agent_completed..... 1 events
+```
+
+#### 3. **Export Proof** - Generate audit-ready proof JSON
+```bash
+python -m src.tools.verify_cli export-proof <log_file> <root_b64> [--output <path>] [--include-events] [--include-log]
+```
+
+Creates a JSON proof with metadata and verification results for archival/audit.
+
+**Example:**
+```powershell
+$env:PYTHONPATH = "."; python -m src.tools.verify_cli export-proof ./logs/run.json "CtF/sK3Mj93lu7eXLCOFqwlAOsTP..." --output proof.json --include-events
+```
+
+**Proof JSON structure:**
+```json
+{
+  "version": "1.0",
+  "generated_at": "2025-01-02T12:00:00.000Z",
+  "metadata": {
+    "session_id": "test_session_1",
+    "event_count": 4,
+    "first_timestamp": "2025-01-02T12:00:00Z",
+    "last_timestamp": "2025-01-02T12:00:03Z"
+  },
+  "verification": {
+    "log_hash_sha256": "d4fd76612a9b79bdc5...",
+    "expected_root_b64": "CtF/sK3Mj93lu7eXLCOFqwlAOsTP...",
+    "computed_root_b64": "CtF/sK3Mj93lu7eXLCOFqwlAOsTP...",
+    "verification_passed": true
+  },
+  "event_summary": {
+    "agent_started": 1,
+    "tool_call": 1
+  }
+}
+```
+
+### Use Cases
+
+- ✅ **Real-time verification** - Immediately after run completion
+- ✅ **Audit trail** - Export proofs for compliance/archival
+- ✅ **Public transparency** - Share proofs without server access
+- ✅ **CI/CD integration** - Batch verification in pipelines
+- ✅ **Offline verification** - No network required after proof export
+
+### Testing
+
+16 comprehensive CLI tests verify all commands:
+```powershell
+python -m pytest tests/test_verify_cli.py -v
+```
+
+---
+
+## 🔍 Verification (Original)
 
 Example:
 ```bash
