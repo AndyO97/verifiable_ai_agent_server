@@ -44,7 +44,7 @@ class OllamaSettings(BaseSettings):
 class OpenRouterSettings(BaseSettings):
     """OpenRouter.ai LLM settings"""
     api_key: Optional[str] = None  # From OPENROUTER_API_KEY env var
-    model: str = "mistralai/mistral-7b-instruct:free"  # Free Mistral 7B model
+    model: str = "mistralai/devstral-2512:free"  # Free Devstral 2512 model
     base_url: str = "https://openrouter.ai/api/v1"
     temperature: float = 0.3  # Lower temperature for more deterministic behavior
     max_tokens: int = 4000  # Increased for better tool call generation

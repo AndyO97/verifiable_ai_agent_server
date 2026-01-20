@@ -144,7 +144,7 @@ class LangfuseClient:
         
         Args:
             trace_id: Trace identifier
-            model: Model name (e.g., "mistral-7b", "gpt-4")
+            model: Model name (e.g., "mistralai/devstral-2512:free", "gpt-4")
             prompt: User prompt
             response: Model response
             input_tokens: Number of input tokens

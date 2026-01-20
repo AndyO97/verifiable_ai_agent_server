@@ -213,7 +213,7 @@ class OpenRouterClient:
     Requires OPENROUTER_API_KEY environment variable or explicit API key.
     
     Free models available:
-    - mistralai/mistral-7b-instruct (free tier)
+    - mistralai/devstral-2512:free (free tier)
     - meta-llama/llama-2-7b-chat
     - others: https://openrouter.ai/docs#models
     
@@ -225,7 +225,7 @@ class OpenRouterClient:
     def __init__(
         self,
         api_key: Optional[str] = None,
-        model: str = "mistralai/mistral-7b-instruct",
+        model: str = "mistralai/devstral-2512:free",
         base_url: str = "https://openrouter.ai/api/v1"
     ):
         """
@@ -233,7 +233,7 @@ class OpenRouterClient:
         
         Args:
             api_key: OpenRouter API key (from environment if not provided)
-            model: Model name (default: free Mistral 7B)
+            model: Model name (default: free Devstral 2512)
             base_url: OpenRouter API base URL
         """
         self.api_key = api_key or os.getenv("OPENROUTER_API_KEY")
