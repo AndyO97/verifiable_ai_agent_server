@@ -65,6 +65,8 @@ logs/
 # Output
 artifacts/
 outputs/
+*.jsonl
+proof.json
 
 # Generated files
 *.pyc

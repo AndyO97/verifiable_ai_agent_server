@@ -59,7 +59,7 @@ def verify(
             typer.echo(f"✗ Error: Log file not found: {canonical_log_path}", err=True)
             raise typer.Exit(1)
         
-        with open(log_path, "rb") as f:
+        with open(log_path, "r", encoding="utf-8") as f:
             canonical_log = f.read()
         
         typer.echo(f"✓ Loaded canonical log ({len(canonical_log):,} bytes)")
@@ -69,7 +69,7 @@ def verify(
             if verbose:
                 typer.echo("Computing SHA-256 hash...")
             
-            actual_hash = hashlib.sha256(canonical_log).hexdigest()
+            actual_hash = hashlib.sha256(canonical_log.encode("utf-8")).hexdigest()
             if actual_hash != expected_hash:
                 typer.echo(f"✗ Hash mismatch!", err=True)
                 typer.echo(f"  Expected: {expected_hash}", err=True)
@@ -95,7 +95,7 @@ def verify(
             typer.echo("Parsing canonical log...")
         
         try:
-            log_data = json.loads(canonical_log.decode("utf-8"))
+            log_data = json.loads(canonical_log)
         except json.JSONDecodeError as e:
             typer.echo(f"✗ Error: Invalid JSON in log file: {e}", err=True)
             raise typer.Exit(1)
@@ -247,8 +247,7 @@ def extract(
 @app.command()
 def export_proof(
     canonical_log_path: str = typer.Argument(..., help="Path to the canonical log file"),
-    expected_root_b64: str = typer.Argument(..., help="Expected Verkle root (Base64-encoded)"),
-    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file path (default: proof.json)"),
+    output: Optional[str] = typer.Argument(None, help="Output file path (default: proof.json)"),
     include_events: bool = typer.Option(False, "--include-events", help="Include full events in proof (verbose)"),
     include_log: bool = typer.Option(False, "--include-log", help="Include entire log in proof")
 ) -> None:
@@ -292,7 +291,7 @@ def export_proof(
             accumulator.add_event(event)
         
         computed_root = accumulator.finalize()
-        verification_passed = (computed_root == base64.b64decode(expected_root_b64))
+        computed_root_b64 = base64.b64encode(computed_root).decode()
         
         # Build proof object
         proof = {
@@ -302,16 +301,14 @@ def export_proof(
                 "session_id": session_id,
                 "event_count": len(events),
                 "file_size_bytes": len(canonical_log),
-                "first_event_type": events[0].get("event_type", "unknown") if events else None,
-                "last_event_type": events[-1].get("event_type", "unknown") if events else None,
+                "first_event_type": events[0].get("type", "unknown") if events else None,
+                "last_event_type": events[-1].get("type", "unknown") if events else None,
                 "first_timestamp": events[0].get("timestamp", None) if events else None,
                 "last_timestamp": events[-1].get("timestamp", None) if events else None,
             },
             "verification": {
                 "log_hash_sha256": hashlib.sha256(canonical_log).hexdigest(),
-                "expected_root_b64": expected_root_b64,
-                "computed_root_b64": base64.b64encode(computed_root).decode(),
-                "verification_passed": verification_passed,
+                "computed_root_b64": computed_root_b64,
                 "verification_timestamp": datetime.utcnow().isoformat(),
             }
         }
@@ -340,7 +337,7 @@ def export_proof(
             json.dump(proof, f, indent=2)
         
         typer.echo(f"✓ Proof exported to {output_path}")
-        typer.echo(f"  Verification: {'PASSED ✓' if verification_passed else 'FAILED ✗'}")
+        typer.echo(f"  Root commitment: {computed_root_b64[:20]}...")
         typer.echo(f"  Events: {len(events)}")
         typer.echo(f"  Size: {output_path.stat().st_size:,} bytes")
         
