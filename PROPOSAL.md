@@ -114,7 +114,6 @@ All metadata included in cryptographic commitment.
 
 - Open-source command-line tool built with Typer framework
 - Runnable by anyone (auditors, regulators, third parties)
-- Available as installable package: `pip install verifiable-ai-agent-server`
 - **Usage:**
   1. Load canonical log from persistent storage
   2. Parse JSON events
@@ -593,6 +592,7 @@ What happens:
 - Production security hardening with TLS/mTLS support
 - Advanced performance optimization and horizontal scaling
 - Load testing and multi-tenant isolation
+- PyPI package distribution (`pip install verifiable-ai-agent-server`)
 - Public release and comprehensive deployment guides
 
 ---

@@ -27,6 +27,13 @@
 | **Documentation Files** | 6 (README, PROJECT_SUMMARY, LANGFUSE_SETUP, VERIFY_CLI_GUIDE, PRD, LATENCY_RESULTS) |
 | **Phase Status** | Phase 2 ✅ Complete | Phase 3 🚀 7/9 Tasks Complete (KZG, Verkle, Counter, Langfuse, OTel, Latency, VerifyCLI) |
 
+### Future Considerations
+
+The following items are considered valuable but have been deferred to future phases:
+- **PyPI Package Distribution** - Would enable `pip install verifiable-ai-agent-server` but requires additional packaging setup and maintenance. Possible Phase 4 task.
+- **Azure Blob Storage Backend** - Currently only stubbed; can be implemented when Azure deployment is prioritized
+- **Additional LLM Providers** - Claude, LLaMA support can be added as additional providers are needed
+
 ---
 
 ## 🚀 Phase 3: Production-Grade Cryptography (In Progress)
