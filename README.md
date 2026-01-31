@@ -127,7 +127,7 @@ The project supports two LLM providers. Choose one:
 ```
 real_prompt_demo.py          # Demo: Simple Q&A with integrity tracking
 real_agent_demo.py           # Demo: Multi-tool agent with tool invocation
-demo_all_work.py             # Demonstration runner for all features
+run_all_tests.py             # Run all tests with progress tracking
 pyproject.toml               # uv/pip compatible dependencies
 setup.ps1                    # Automated setup script (Windows)
 docker-compose.yml           # Langfuse self-hosted deployment
@@ -142,7 +142,7 @@ OLLAMA_SETUP_GUIDE.txt       # Alternative LLM provider guide
 **Key Files:**
 - `real_prompt_demo.py` - Entry point for simple demo with Langfuse tracing
 - `real_agent_demo.py` - Entry point for agent demo with tool invocation
-- `demo_all_work.py` - Run all demonstrations with progress tracking
+- `run_all_tests.py` - Run all tests with progress tracking
 - `.env` - Local configuration (credentials, API keys, not in git)
 - `docker-compose.yml` - Langfuse deployment (optional observability)
 
