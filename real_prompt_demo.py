@@ -81,6 +81,26 @@ DIM = "\033[2m"
 from src.crypto.verkle import VerkleAccumulator
 from src.crypto.encoding import canonicalize_json
 
+# Try to import Langfuse (optional)
+try:
+    from src.observability.langfuse_client import LangfuseClient
+    LANGFUSE_AVAILABLE = True
+except ImportError:
+    LANGFUSE_AVAILABLE = False
+
+
+# Langfuse helper
+def check_langfuse_running() -> bool:
+    """Check if Langfuse server is running"""
+    if not LANGFUSE_AVAILABLE:
+        return False
+    try:
+        import requests
+        response = requests.get("http://localhost:3000/api/public/health", timeout=2)
+        return response.status_code == 200
+    except Exception:
+        return False
+
 
 def print_header(title: str) -> None:
     """Print a large header."""
@@ -200,10 +220,33 @@ def run_real_agent_workflow() -> None:
     session_id = "real-agent-" + datetime.now().strftime("%Y%m%d-%H%M%S")
     accumulator = VerkleAccumulator(session_id=session_id)
     
+    # Try to initialize Langfuse if available
+    langfuse_client = None
+    trace_id = None
+    langfuse_status = ""
+    
+    if check_langfuse_running():
+        try:
+            langfuse_client = LangfuseClient(session_id=session_id)
+            trace_id = langfuse_client.create_trace(
+                name="real_prompt_demo",
+                metadata={
+                    "demo_type": "simple_prompt_response",
+                    "model": model,
+                }
+            )
+            langfuse_status = f" + Langfuse tracing enabled"
+            print(f"{GREEN}[OK] Langfuse client initialized (traces will be visible at http://localhost:3000){RESET}")
+        except Exception as e:
+            print(f"{YELLOW}[WARN] Could not initialize Langfuse: {str(e)}{RESET}")
+            langfuse_client = None
+    else:
+        print(f"{YELLOW}[INFO] Langfuse not detected (optional - running without observability){RESET}")
+    
     print(f"{GREEN}[OK] Canonical JSON Encoder initialized (RFC 8785){RESET}")
     print(f"{GREEN}[OK] Verkle Accumulator initialized (KZG commitments, BLS12-381){RESET}")
     print(f"{GREEN}[OK] Session ID: {session_id}{RESET}")
-    print(f"{GREEN}[OK] Model: {model}{RESET}\n")
+    print(f"{GREEN}[OK] Model: {model}{langfuse_status}{RESET}\n")
     
     # STEP 2: User prompt
     print_subheader("STEP 2: User Sends Prompt to Agent")
@@ -223,6 +266,11 @@ def run_real_agent_workflow() -> None:
     print_hash("SHA-256 Hash", event_user_hash[:32] + "..." + event_user_hash[-8:], GREEN)
     
     accumulator.add_event(event_user_prompt)
+    if langfuse_client and trace_id:
+        langfuse_client.add_event_to_trace(trace_id, "user_prompt", {
+            "prompt": user_prompt,
+            "hash": event_user_hash[:32] + "..."
+        })
     print(f"{GREEN}[OK] Event added to Verkle accumulator{RESET}\n")
     
     # STEP 3: Agent routes to LLM
@@ -273,6 +321,16 @@ def run_real_agent_workflow() -> None:
     print_hash("SHA-256 Hash", event_response_hash[:32] + "..." + event_response_hash[-8:], GREEN)
     
     accumulator.add_event(event_llm_response)
+    if langfuse_client and trace_id:
+        langfuse_client.record_llm_call(
+            trace_id=trace_id,
+            model=model,
+            prompt=user_prompt,
+            response=llm_response_text,
+            input_tokens=0,
+            output_tokens=0,
+            cost=0.0
+        )
     print(f"{GREEN}[OK] Event added to Verkle accumulator{RESET}\n")
     
     # STEP 6: Final agent response
@@ -337,9 +395,20 @@ def run_real_agent_workflow() -> None:
     if verified_root == root_b64:
         print(f"{GREEN}{BOLD}[OK] VERIFICATION SUCCESSFUL!{RESET}")
         print(f"{GREEN}Expected root matches computed root{RESET}\n")
+        verification_passed = True
     else:
         print(f"{RED}{BOLD}[FAILED] VERIFICATION FAILED!{RESET}")
         print(f"{RED}Roots do not match{RESET}\n")
+        verification_passed = False
+    
+    if langfuse_client and trace_id:
+        langfuse_client.record_integrity_check(
+            trace_id=trace_id,
+            counter=len(all_events),
+            commitment=root_b64,
+            events_count=len(all_events),
+            verified=verification_passed
+        )
     
     # STEP 9: Compare actual response with logged response
     print_subheader("STEP 9: Verify Logged Response Matches Actual Response")
@@ -422,6 +491,16 @@ def run_real_agent_workflow() -> None:
     
     print(f"\n{GREEN}[OK] Canonical log saved to: {log_file}{RESET}")
     print(f"{GREEN}[OK] Root commitment: {root_b64}{RESET}\n")
+    
+    # Finalize Langfuse trace
+    if langfuse_client and trace_id:
+        langfuse_client.finalize_trace(trace_id)
+        summary = langfuse_client.get_session_summary()
+        print(f"{GREEN}[OK] Langfuse trace finalized{RESET}")
+        print(f"{GREEN}    View trace at: http://localhost:3000{RESET}")
+        print(f"{GREEN}    Session: {summary['session_id']}{RESET}")
+        print(f"{GREEN}    Traces: {summary['total_traces']}{RESET}")
+        print(f"{GREEN}    Events: {summary['total_events']}{RESET}\n")
     
     print_header("[COMPLETE] REAL-TIME DEMO COMPLETE")
     

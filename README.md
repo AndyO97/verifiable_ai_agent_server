@@ -434,6 +434,124 @@ python -m src.tools.verify_cli extract real_workflow.jsonl
 python -m src.tools.verify_cli export-proof real_workflow.jsonl proof.json --include-events
 ```
 
+---
+
+## 📊 Optional: Visualize Demos in Langfuse Dashboard
+
+Both demos have **built-in Langfuse integration** (optional). If Langfuse is running, demo traces will be automatically sent to the dashboard for real-time visualization.
+
+**Important:** Langfuse is completely optional. Demos work perfectly without it:
+- ✅ If Langfuse running → traces automatically collected and visible in dashboard  
+- ✅ If Langfuse not running → demos run normally with no errors (graceful fallback)
+- ✅ No setup required to test other features
+
+### Quick Start: Enable Langfuse (5 minutes)
+
+**Prerequisites:** Docker & Docker Compose
+
+**Step 1: Start Langfuse services**
+```powershell
+cd /path/to/project
+docker-compose up -d
+```
+
+Check status:
+```powershell
+docker-compose ps
+# Expected: langfuse_db (healthy) and langfuse_server (up)
+```
+
+**Step 2: Create account and get API credentials**
+
+1. Visit http://localhost:3000
+2. Create organization (first-time setup)
+3. Create project within organization
+4. Go to project settings → API Keys
+5. Copy your credentials:
+   - Public Key: `pk-lf-...`
+   - Secret Key: `sk-lf-...`
+
+**Step 3: Configure credentials in `.env`**
+
+Add to your `.env` file:
+```bash
+LANGFUSE_API_ENDPOINT=http://localhost:3000
+LANGFUSE_PUBLIC_KEY=pk-lf-your-key-here
+LANGFUSE_SECRET_KEY=sk-lf-your-key-here
+```
+
+**Step 4: Run demo - traces will appear automatically**
+```powershell
+& .\venv\Scripts\Activate.ps1; python real_prompt_demo.py
+# or
+& .\venv\Scripts\Activate.ps1; python real_agent_demo.py
+```
+
+Traces will appear in dashboard within 2-5 seconds at http://localhost:3000
+
+### Dashboard Features
+
+View traces at http://localhost:3000:
+
+1. **Trace Timeline** - Visual timeline with event durations and ordering
+2. **Cost Tracking** - Input/output tokens and estimated API costs
+3. **Metadata** - Session ID, tool parameters, integrity commitments
+4. **Event Details** - Full JSON payloads and verification status
+
+### What Gets Captured
+
+**Demo 1 (real_prompt_demo.py):** 1 trace + 3 events
+```
+├── user_prompt
+├── llm_response (model, tokens, cost)
+└── integrity_check (verification status)
+```
+
+**Demo 2 (real_agent_demo.py):** 1 trace + 8+ events
+```
+├── user_prompt
+├── tool_call (query_verkle)
+├── tool_call (query_verkle)
+├── tool_call (get_crypto_info)
+├── llm_response
+└── integrity_check
+```
+
+### Troubleshooting
+
+**Langfuse not accessible:**
+```powershell
+docker ps                          # Verify Docker running
+docker-compose ps                  # Check Langfuse status
+docker-compose logs langfuse_server # View logs
+docker-compose restart langfuse_server # Restart if needed
+```
+
+**Traces not appearing:**
+- Ensure credentials are correct in `.env`
+- Demo must complete successfully
+- Check browser cache - refresh page
+- Verify services are healthy: `docker-compose ps`
+
+**Port 3000 already in use:**
+```yaml
+# Modify docker-compose.yml
+langfuse_server:
+  ports:
+    - "3001:3000"  # Use port 3001 instead
+```
+
+Then update `.env`:
+```bash
+LANGFUSE_API_ENDPOINT=http://localhost:3001
+```
+
+**Stop Langfuse:**
+```powershell
+docker-compose stop              # Stop (keep data)
+docker-compose down -v           # Remove everything (deletes data)
+```
+
 ### Basic Usage
 
 ```python

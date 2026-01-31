@@ -8,6 +8,25 @@ version: '3.8'
 # OTLP Receiver: localhost:4317
 
 services:
+  # ClickHouse database for Langfuse v3
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    container_name: langfuse_clickhouse
+    environment:
+      CLICKHOUSE_DB: langfuse
+    ports:
+      - "8123:8123"    # HTTP interface
+      - "9000:9000"    # Native protocol
+    volumes:
+      - langfuse_clickhouse_data:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - langfuse_network
+
   # PostgreSQL database for Langfuse
   postgres:
     image: postgres:16-alpine
@@ -30,7 +49,7 @@ services:
 
   # Langfuse backend API
   langfuse_server:
-    image: langfuse/langfuse:latest
+    image: langfuse/langfuse:2
     container_name: langfuse_server
     depends_on:
       postgres:
@@ -40,8 +59,11 @@ services:
       DATABASE_URL: postgresql://langfuse:${POSTGRES_PASSWORD:-changeme}@postgres:5432/langfuse
       
       # Server configuration
-      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:-your-secret-key-change-in-production}
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:-your-secret-key-change-in-production-min-24-chars}
       NEXTAUTH_URL: http://localhost:3000
+      
+      # Encryption salt (required for Langfuse v2)
+      SALT: ${SALT:-your-salt-key-change-in-production-min-16-chars}
       
       # Default admin user
       DEFAULT_USER_EMAIL: ${LANGFUSE_ADMIN_EMAIL:-admin@example.com}
@@ -76,6 +98,8 @@ services:
       description: "Langfuse trace collection and visualization platform"
 
 volumes:
+  langfuse_clickhouse_data:
+    driver: local
   langfuse_db_data:
     driver: local
 

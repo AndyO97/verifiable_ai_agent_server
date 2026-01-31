@@ -60,7 +60,7 @@ class S3Settings(BaseSettings):
 
 class LangfuseSettings(BaseSettings):
     """Langfuse self-hosted settings"""
-    model_config = ConfigDict(env_prefix="LANGFUSE_")
+    model_config = ConfigDict(env_prefix="LANGFUSE_", env_file=".env", case_sensitive=False, extra="ignore")
     
     api_endpoint: str = "http://localhost:3000"
     public_key: Optional[str] = None

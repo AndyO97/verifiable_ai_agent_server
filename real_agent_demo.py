@@ -97,6 +97,25 @@ DIM = "\033[2m"
 from src.crypto.verkle import VerkleAccumulator
 from src.crypto.encoding import canonicalize_json
 
+# Try to import Langfuse (optional)
+try:
+    from src.observability.langfuse_client import LangfuseClient
+    LANGFUSE_AVAILABLE = True
+except ImportError:
+    LANGFUSE_AVAILABLE = False
+
+
+# Langfuse helper
+def check_langfuse_running() -> bool:
+    """Check if Langfuse server is running"""
+    if not LANGFUSE_AVAILABLE:
+        return False
+    try:
+        import requests
+        response = requests.get("http://localhost:3000/api/public/health", timeout=2)
+        return response.status_code == 200
+    except Exception:
+        return False
 
 # ============================================================================
 # TOOL DEFINITIONS
@@ -390,10 +409,34 @@ def run_real_agent_workflow() -> None:
     session_id = "real-agent-" + datetime.now().strftime("%Y%m%d-%H%M%S")
     accumulator = VerkleAccumulator(session_id=session_id)
     
+    # Try to initialize Langfuse if available
+    langfuse_client = None
+    trace_id = None
+    langfuse_status = ""
+    
+    if check_langfuse_running():
+        try:
+            langfuse_client = LangfuseClient(session_id=session_id)
+            trace_id = langfuse_client.create_trace(
+                name="real_agent_demo",
+                metadata={
+                    "demo_type": "agent_with_tools",
+                    "model": model,
+                    "tools_count": len(AVAILABLE_TOOLS),
+                }
+            )
+            langfuse_status = f" + Langfuse tracing enabled"
+            print(f"{GREEN}[OK] Langfuse client initialized (traces will be visible at http://localhost:3000){RESET}")
+        except Exception as e:
+            print(f"{YELLOW}[WARN] Could not initialize Langfuse: {str(e)}{RESET}")
+            langfuse_client = None
+    else:
+        print(f"{YELLOW}[INFO] Langfuse not detected (optional - running without observability){RESET}")
+    
     print(f"{GREEN}[OK] Canonical JSON Encoder initialized (RFC 8785){RESET}")
     print(f"{GREEN}[OK] Verkle Accumulator initialized (KZG commitments, BLS12-381){RESET}")
     print(f"{GREEN}[OK] Session ID: {session_id}{RESET}")
-    print(f"{GREEN}[OK] Model: {model}{RESET}")
+    print(f"{GREEN}[OK] Model: {model}{langfuse_status}{RESET}")
     print(f"{GREEN}[OK] Available tools: {len(AVAILABLE_TOOLS)}{RESET}\n")
     
     # STEP 2: User prompt
@@ -421,6 +464,12 @@ def run_real_agent_workflow() -> None:
     print_hash("SHA-256 Hash", event_user_hash[:32] + "..." + event_user_hash[-8:], GREEN)
     
     accumulator.add_event(event_user_prompt)
+    if langfuse_client and trace_id:
+        langfuse_client.add_event_to_trace(trace_id, "user_prompt", {
+            "prompt": user_prompt[:200],
+            "tools_available": len(AVAILABLE_TOOLS),
+            "hash": event_user_hash[:32] + "..."
+        })
     print(f"{GREEN}[OK] Event added to Verkle accumulator{RESET}\n")
     
     # STEP 3: Agent interaction with tool invocation
@@ -513,6 +562,15 @@ After each tool call, I will provide the result. Continue using tools as needed,
                 print_hash("Tool Execution Hash", event_tool_hash[:32] + "..." + event_tool_hash[-8:], GREEN)
                 
                 accumulator.add_event(event_tool_exec)
+                if langfuse_client and trace_id:
+                    langfuse_client.record_tool_call(
+                        trace_id=trace_id,
+                        tool_name=tool_name,
+                        input_data=tool_input,
+                        output_data={"result": tool_result},
+                        duration_ms=0.0,
+                        success=True
+                    )
                 print(f"{GREEN}[OK] Tool execution added to accumulator{RESET}\n")
                 
                 # Add conversation history
@@ -585,11 +643,21 @@ After each tool call, I will provide the result. Continue using tools as needed,
     verifier.finalize()
     verified_root = verifier.get_root_b64()
     
-    if verified_root == root_b64:
+    verification_passed = verified_root == root_b64
+    if verification_passed:
         print(f"{GREEN}{BOLD}[OK] VERIFICATION SUCCESSFUL!{RESET}")
         print(f"{GREEN}Complete agent trace verified{RESET}\n")
     else:
         print(f"{RED}{BOLD}[FAILED] VERIFICATION FAILED!{RESET}\n")
+    
+    if langfuse_client and trace_id:
+        langfuse_client.record_integrity_check(
+            trace_id=trace_id,
+            counter=len(all_events),
+            commitment=root_b64,
+            events_count=len(all_events),
+            verified=verification_passed
+        )
     
     # STEP 5: Summary
     print_subheader("STEP 5: Agent Interaction Summary")
@@ -621,6 +689,16 @@ After each tool call, I will provide the result. Continue using tools as needed,
     
     print(f"\n{GREEN}[OK] Canonical log saved to: {log_file}{RESET}")
     print(f"{GREEN}[OK] Root commitment: {root_b64}{RESET}\n")
+    
+    # Finalize Langfuse trace
+    if langfuse_client and trace_id:
+        langfuse_client.finalize_trace(trace_id)
+        summary = langfuse_client.get_session_summary()
+        print(f"{GREEN}[OK] Langfuse trace finalized{RESET}")
+        print(f"{GREEN}    View trace at: http://localhost:3000{RESET}")
+        print(f"{GREEN}    Session: {summary['session_id']}{RESET}")
+        print(f"{GREEN}    Traces: {summary['total_traces']}{RESET}")
+        print(f"{GREEN}    Events: {summary['total_events']}{RESET}\n")
     
     print_header("[COMPLETE] REAL-TIME AGENT DEMO COMPLETE")
     

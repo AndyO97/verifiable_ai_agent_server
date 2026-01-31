@@ -15,6 +15,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Optional
 from datetime import datetime, timezone
 import uuid
+import json
+import requests
+from requests.auth import HTTPBasicAuth
 
 import structlog
 
@@ -288,7 +291,116 @@ class LangfuseClient:
             total_cost=trace["cost"]["total_cost"]
         )
         
+        # Send trace to Langfuse server
+        self._send_trace_to_langfuse(trace)
+        
         return trace
+    
+    def _send_trace_to_langfuse(self, trace: dict) -> None:
+        """
+        Send a trace to the Langfuse server via HTTP API
+        
+        Args:
+            trace: Trace dict to send
+        """
+        if not self.settings.langfuse.public_key or not self.settings.langfuse.secret_key:
+            logger.debug("langfuse_credentials_not_configured")
+            return
+        
+        try:
+            # Prepare auth
+            auth = HTTPBasicAuth(
+                self.settings.langfuse.public_key,
+                self.settings.langfuse.secret_key
+            )
+            
+            # Use Langfuse ingestion endpoint with batch format
+            ingestion_url = f"{self.api_endpoint}/api/public/ingestion"
+            
+            # Build batch request with trace and observations
+            batch_items = []
+            
+            # Timestamp for all items
+            timestamp_iso = trace.get("timestamp", datetime.now(timezone.utc).isoformat())
+            
+            # Add trace creation
+            batch_items.append({
+                "type": "trace-create",
+                "id": trace["trace_id"],  # id at top level (required by API)
+                "timestamp": timestamp_iso,  # timestamp at top level (required by API)
+                "body": {
+                    "name": trace["name"],
+                    "userId": trace["user_id"],
+                    "metadata": trace["metadata"],
+                    "tags": ["verified-agent"],
+                }
+            })
+            
+            # Add events as observations
+            for i, event in enumerate(trace["events"]):
+                event_id = f"{trace['trace_id']}-event-{i}"
+                event_timestamp = event.get("timestamp", datetime.now(timezone.utc).isoformat())
+                observation_body = {
+                    "traceId": trace["trace_id"],
+                    "type": "EVENT",  # Must be uppercase
+                    "name": event.get("name", "event"),
+                    "input": json.dumps(event.get("data", {}))[:1000],
+                }
+                # Only add metadata if there are extra fields
+                if event.get("level"):
+                    observation_body["metadata"] = {
+                        "level": event.get("level"),
+                    }
+                
+                batch_items.append({
+                    "type": "observation-create",
+                    "id": event_id,  # id at top level (required by API)
+                    "timestamp": event_timestamp,  # timestamp at top level (required by API)
+                    "body": observation_body
+                })
+            
+            payload = {"batch": batch_items}
+            
+            # Debug: log the payload
+            logger.debug("sending_trace_batch_to_langfuse", trace_id=trace["trace_id"], items_count=len(batch_items), payload=json.dumps(payload, indent=2)[:500])
+            
+            response = requests.post(
+                ingestion_url,
+                json=payload,
+                auth=auth,
+                timeout=10,
+                headers={"Content-Type": "application/json"}
+            )
+            
+            if response.status_code in (200, 201, 207):
+                logger.info(
+                    "trace_sent_to_langfuse",
+                    trace_id=trace["trace_id"],
+                    status_code=response.status_code,
+                    events_count=len(trace["events"]),
+                )
+                
+                # Log response for debugging
+                try:
+                    response_data = response.json()
+                    logger.debug("langfuse_response", response=response_data)
+                except:
+                    logger.debug("langfuse_response_text", response=response.text[:500])
+            else:
+                logger.warning(
+                    "langfuse_trace_send_failed",
+                    trace_id=trace["trace_id"],
+                    status_code=response.status_code,
+                    response_text=response.text[:300]
+                )
+        
+        except Exception as e:
+            logger.warning(
+                "langfuse_send_error",
+                trace_id=trace.get("trace_id", "unknown"),
+                error=str(e),
+                error_type=type(e).__name__
+            )
     
     def get_session_summary(self) -> dict:
         """
