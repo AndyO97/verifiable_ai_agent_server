@@ -247,12 +247,12 @@ Every logged event follows this structure:
 **What we have NOW:** **Merkle Tree** (SHA-256 based)
 - Class: `VerkleAccumulator` (in `src/crypto/verkle.py`)
 - Algorithm: Pairwise hash combination creating single root commitment
-- Status: ✅ **Fully functional and tested** (all 35 Phase 2 tests passing)
+- Status: ✅ **Fully functional and tested** (all tests passing)
 - Implementation: Canonically-encoded events → SHA-256 hashing → Merkle tree
 
 **Why the naming?** The class is named `VerkleAccumulator` to prepare for Phase 3's upgrade path (see below). The current implementation provides full integrity guarantees using well-understood Merkle cryptography.
 
-### Phase 3: Verkle Tree Upgrade (Future)
+### Future: Verkle Tree Upgrade
 
 When Phase 3 begins, the implementation will be upgraded to:
 - **KZG Polynomial Commitments** over BLS12-381 elliptic curve
@@ -265,7 +265,7 @@ See `src/crypto/verkle.py` for integration points and TODO comments.
 
 ---
 
-## 🔍 Verification CLI (Phase 3 ✅ Complete)
+## 🔍 Verification CLI
 
 The **Verification CLI** provides public, third-party verification of agent run integrity without requiring server access. See detailed guide below for comprehensive documentation.
 
@@ -589,11 +589,15 @@ POSTGRES_USER=postgres
 POSTGRES_PASSWORD=...
 POSTGRES_DATABASE=verifiable_agent
 
-# OpenTelemetry
+# OpenTelemetry (optional - for observability and tracing)
+# If not configured, agent runs without distributed tracing
+# Exports traces to OTLP endpoint (default: localhost:4317)
 OTEL_OTLP_ENDPOINT=http://localhost:4317
 OTEL_SERVICE_NAME=verifiable-ai-agent
 
-# Langfuse
+# Langfuse (optional - for trace visualization and observability dashboard)
+# Requires Langfuse running (see LANGFUSE_SETUP_GUIDE.md)
+# Traces from OpenTelemetry are exported to Langfuse automatically
 LANGFUSE_API_ENDPOINT=http://localhost:3000
 LANGFUSE_PUBLIC_KEY=...
 LANGFUSE_SECRET_KEY=...
@@ -604,11 +608,27 @@ PORT=8000
 ```
 
 **PostgreSQL Details:**
-- ✅ **Fully integrated** for atomic counter persistence (Phase 3 Task 3)
+- ✅ **Fully integrated** for atomic counter persistence
 - ✅ Provides replay attack detection and monotonic counter enforcement
 - ⚠️ **Optional for development**: Demos work without it (counter data not persisted across server restarts)
 - ✅ **Recommended for production**: Enables stateless counter validation and recovery
 - Dependencies: `sqlalchemy`, `psycopg2-binary` (already in pyproject.toml)
+
+**OpenTelemetry Details:**
+- ✅ **Fully integrated** for distributed tracing and observability
+- ✅ Provides hierarchical span management with automatic duration measurement
+- ✅ Exports spans to OTLP endpoint (typically Langfuse or Jaeger)
+- ⚠️ **Optional for development**: Demos work without it (graceful fallback if OTEL_AVAILABLE=False)
+- ✅ **Recommended with Langfuse**: See LANGFUSE_SETUP_GUIDE.md for dashboard visualization
+- Dependencies: `opentelemetry-api`, `opentelemetry-sdk`, `opentelemetry-exporter-otlp` (already in pyproject.toml)
+- Test coverage: 21 tests in [tests/test_otel_spans.py](tests/test_otel_spans.py)
+
+**Langfuse Details:**
+- ✅ **Fully integrated** for trace visualization and cost analysis
+- ✅ Receives traces from OpenTelemetry OTLP exporter
+- ⚠️ **Optional**: Can run without it (OTel traces go to configured OTLP endpoint)
+- ✅ **Recommended for observability**: Dashboard shows span hierarchy, duration, tokens, costs
+- Setup: 5 minutes with Docker Compose (see LANGFUSE_SETUP_GUIDE.md)
 
 ---
 
