@@ -1,6 +1,11 @@
 ================================================================================
-OLLAMA SETUP & CONFIGURATION GUIDE
+OLLAMA SETUP & CONFIGURATION GUIDE (Alternative LLM Provider)
 ================================================================================
+
+This guide covers setting up Ollama as an ALTERNATIVE local LLM provider.
+
+⚠️  NOTE: OpenRouter.ai is the PRIMARY/RECOMMENDED LLM provider for this project
+(see README.md). Ollama setup is optional for users who prefer local inference.
 
 Quick setup guide for running Ollama with the Verifiable AI Agent Server.
 
@@ -115,25 +120,26 @@ Step 4: Verify model is loaded:
 SECTION 5: TESTING OLLAMA CONNECTION
 ================================================================================
 
-VERIFY SETUP WITH DIAGNOSTICS
-==============================
+VERIFY SETUP WITH LANGFUSE INTEGRATION
+=======================================
 
-Before running project code, verify Ollama is working:
+To test Ollama with the project (with Langfuse tracing):
 
-   $ $env:PYTHONPATH = "."; python examples/ollama_diagnostics.py
+1. Ensure Langfuse is running (see LANGFUSE_SETUP_GUIDE.md)
+2. Set environment variable to use Ollama:
+   
+   $env:OLLAMA_BASE_URL="http://localhost:11434"
+   $env:OLLAMA_MODEL="mistral"
 
-Expected output (all checks should show [OK]):
+3. Run the demo with Ollama:
+   
+   python real_prompt_demo.py
 
-   [OK] Ollama Server
-       Running at http://localhost:11434
+This will use Ollama for LLM inference while maintaining Langfuse tracing.
 
-   [OK] Models Available
-       mistral (3.8 GB)
-
-   [OK] Generate Endpoint Test
-       Successfully called /api/generate
-
-   [SUCCESS] Ollama is ready!
+ALTERNATIVE: Force Ollama when OpenRouter key exists:
+   
+   $env:USE_OLLAMA="1"; python real_prompt_demo.py
 
 TROUBLESHOOTING COMMON ISSUES
 ==============================
@@ -160,12 +166,18 @@ Solution:
 NEXT STEPS
 ================================================================================
 
-1. ✅ Complete Sections 1-5 above
-2. ✅ Run diagnostics script (Section 5)
-3. ✅ Run validation: python examples/validate_phase2.py
-4. ✅ Run demo: python examples/llm_demo.py
+For getting started with the main project:
 
-QUICK REFERENCE
+1. ✅ See README.md (Primary setup guide - recommends OpenRouter)
+2. ✅ See LANGFUSE_SETUP_GUIDE.md (Observability setup)
+3. ✅ Complete Ollama Sections 1-5 above (if using Ollama instead of OpenRouter)
+4. ✅ Run the main demo: python real_prompt_demo.py
+
+For development:
+
+- Configuration logic: src/config.py
+- LLM implementations: src/llm/__init__.py (OllamaClient, OpenRouterClient)
+- Environment variables: .env or .env.example
 ===============
 
 # Pull a model
@@ -189,6 +201,22 @@ $ curl http://localhost:11434/api/tags
 # Check version
 $ ollama --version
 
-For more advanced configuration, see README.md and src/config.py
+For more advanced configuration, see README.md, .env.example, and src/config.py
 
 ================================================================================
+COMPARISON: OPENROUTER vs OLLAMA
+================================================================================
+
+OpenRouter (PRIMARY - Recommended)
+- Free API key: https://openrouter.ai/keys
+- Cloud-based: No local setup needed
+- Model selection: 100+ free and paid models
+- Setup time: ~2 minutes
+- Best for: Quick setup, multiple models, production
+
+Ollama (ALTERNATIVE - Optional)
+- Free: Fully local inference
+- Local-based: Requires downloads + resources
+- Model selection: Community models (mistral, llama2, etc.)
+- Setup time: 30-60 minutes + model download
+- Best for: Privacy-focused, offline work, learning
