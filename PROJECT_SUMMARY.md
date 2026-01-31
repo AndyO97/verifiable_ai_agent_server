@@ -24,7 +24,7 @@
 | **Lines of Code** | ~3,500+ |
 | **Python Modules** | 14 |
 | **Test Cases** | 158 (all passing ✅) |
-| **Documentation Files** | 6 (README, PROJECT_SUMMARY, LANGFUSE_SETUP, VERIFY_CLI_GUIDE, PRD, LATENCY_RESULTS) |
+| **Documentation Files** | 5 (README, PROJECT_SUMMARY, PROPOSAL, PRD) |
 | **Phase Status** | Phase 2 ✅ Complete | Phase 3 🚀 7/9 Tasks Complete (KZG, Verkle, Counter, Langfuse, OTel, Latency, VerifyCLI) |
 
 ### Future Considerations
@@ -60,10 +60,9 @@ Phase 3 transitions from **Merkle trees** to **Verkle trees with KZG polynomial 
 | 3. PostgreSQL Counter | ✅ Complete | 3 | Security hardening |
 | 4. Langfuse Deploy | ✅ Complete | 4 | Observability |
 | 5. OTel Spans | ✅ Complete | 4 | Trace visibility |
-| 6. Latency Benchmarks | ✅ Complete | 3 | Performance validation |
-| 7. Verification CLI | ✅ Complete | 3 | Public verification |
-| 8. Test Suite (30+) | ✅ Complete* | 4 | Coverage to 158+ tests |
-| 9. Documentation | ⏳ Planned | 2 | Deployment guides |
+| 6. Verification CLI | ✅ Complete | 3 | Public verification |
+| 7. Test Suite (30+) | ✅ Complete* | 4 | Coverage to 158+ tests |
+| 8. Documentation | ✅ Complete | 2 | Setup & usage guides |
 
 ### KZG Implementation Highlights ✅
 

@@ -578,7 +578,6 @@ What happens:
 - **PostgreSQL counter persistence** - Atomic monotonic counters for replay attack detection
 - **Langfuse observability integration** - Trace collection, cost tracking, and dashboard visualization
 - **OpenTelemetry span instrumentation** - Full trace visibility across all components
-- **Latency benchmarking** - Performance profiling and optimization metrics
 - **Public verification CLI** - Third-party validation tool for cryptographic integrity
 - **Comprehensive security testing** - Edge cases, rollback scenarios, and attack pattern validation
 
@@ -665,7 +664,6 @@ This project demonstrates practical answers to several important research questi
    - ✅ **Production-grade?** Yes - 158+ tests validate all operations
 
 2. **How do we balance security requirements with practical performance?**
-   - Benchmark results show acceptable latency overhead (<5% for crypto operations)
    - Verkle trees provide efficiency gains over traditional Merkle approaches
    - Asynchronous spans allow non-blocking observability
 
