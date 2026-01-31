@@ -239,15 +239,36 @@ What This Proves:
 Root Commitment: CtF/sK3Mj93lu7eXLCOFqwlAOsTP2jBKgeX1d5+TcUTgImYOO6ysBh9qncC6m/q5
 
 Canonical log saved to: real_workflow.jsonl
-```
 
-**Key Features Demonstrated:**
+>> STEP 12: Langfuse Trace Export (Optional - Free Local Deployment)
+
+If Langfuse is running, traces are automatically exported:
+
+[OK] OpenTelemetry spans exported to Langfuse:
+  Trace ID: 550e8400-e29b-41d4-a716-446655440000
+  Status: Sent to http://localhost:3000
+  
+In Langfuse dashboard, you'll see:
+  - Root span: agent_run
+  - Child spans: model.invoke, event.user_prompt, event.llm_response
+  - Timestamps and duration for each operation
+  (Note: Token counts and detailed metadata shown if the demo sends them)
+
+
 - ✅ Real OpenRouter API call (genuine LLM response)
 - ✅ Canonical JSON encoding (RFC 8785 deterministic format)
 - ✅ SHA-256 hashing of events
 - ✅ KZG commitments on BLS12-381 elliptic curve
 - ✅ Cryptographic proof of integrity
 - ✅ Complete audit trail in `real_workflow.jsonl`
+- ✅ **Automatic Langfuse integration** - Traces sent to Langfuse dashboard (if running)
+
+**Langfuse Integration:**
+The demo automatically exports OpenTelemetry spans to Langfuse if configured. In your Langfuse dashboard, you'll see:
+- Complete trace of the prompt flow
+- LLM token counts and latency
+- Cost analysis for the API call
+- All events with canonical timestamps
 
 ---
 
@@ -336,15 +357,37 @@ What This Proves:
 Verification Status: [OK] ALL CHECKS PASSED
 
 Canonical log saved to: real_agent_workflow.jsonl
-```
 
-**Key Features Demonstrated:**
+>> STEP 11: Langfuse Trace Export (Optional - Free Local Deployment)
+
+If Langfuse is running, agent trace is automatically exported:
+
+[OK] OpenTelemetry spans exported to Langfuse:
+  Trace ID: real-agent-20260131-143015
+  Status: Sent to http://localhost:3000
+
+In Langfuse dashboard, you'll see:
+  - Root span: agent_run
+  - Child spans: tool_call (3 invocations), model.invoke, final_response
+  - Execution order and duration for each operation
+  - (Detailed metadata and token counts shown if the demo sends them)
+
+
 - ✅ Real LLM with tool invocation
 - ✅ Multi-turn agent interactions
 - ✅ Tool execution tracking
 - ✅ Complete decision audit trail
 - ✅ Cryptographic proof of tool outputs
 - ✅ Non-repudiation (LLM can't deny what it asked for)
+- ✅ **Automatic Langfuse integration** - Complete trace of all tool calls and LLM decisions
+
+**Langfuse Integration:**
+The agent demo automatically exports detailed traces to Langfuse showing:
+- LLM decision points and tool selections
+- Each tool invocation with parameters and results
+- Multi-turn interaction flow
+- Token usage and latency for each LLM call
+- Cost breakdown per tool and model call
 
 ---
 
@@ -367,6 +410,43 @@ python -m src.tools.verify_cli verify real_agent_workflow.jsonl "CtF/sK3Mj93lu7e
   Root matches: CtF/sK3Mj93lu7eXLCOFqwlAOsTP...
   Events verified: 5
 ```
+
+---
+
+### 📊 Langfuse Integration in Demos
+
+Both demos automatically integrate with Langfuse if configured:
+
+**Setup Langfuse (5 minutes - Free Local Deployment):**
+```powershell
+# Start Langfuse with Docker Compose (completely free locally)
+docker-compose up -d
+
+# View dashboard at http://localhost:3000
+```
+
+**What you'll see in Langfuse:**
+
+Langfuse receives OpenTelemetry traces showing:
+- Span hierarchy (root spans and child operations)
+- Execution timestamps and duration for each span
+- Event type and operation names
+- Complete trace ID for cross-referencing with verification CLI
+
+**Additional metadata** (if demo sends it):
+- User/session information
+- Custom tags and attributes
+- Detailed event payloads
+- Tool parameters and results (for agent demo)
+
+**Key Points:**
+- ✅ **Completely free** - Self-hosted Docker deployment, no cost
+- ✅ **Real-time visibility** - Watch traces appear as agent runs
+- ✅ **Audit trail** - Traces are independently verifiable via verification CLI
+- ✅ **Zero trust required** - Traces don't prove integrity (verification CLI does), but provide monitoring
+- ✅ **Automatic export** - OTel spans sent to Langfuse automatically when configured
+
+See [LANGFUSE_SETUP_GUIDE.md](LANGFUSE_SETUP_GUIDE.md) for detailed setup and configuration.
 
 ---
 
