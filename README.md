@@ -1040,33 +1040,6 @@ Key test modules:
 
 ---
 
-## 📋 Development Roadmap
-
-### Phase 1 – Foundation (Weeks 1–2) ✅ In Progress
-- [x] FastMCP server scaffolding
-- [x] Canonical encoding (RFC 8785)
-- [x] Verkle accumulator (merkle placeholder)
-- [x] IntegrityMiddleware
-- [x] Basic tests
-- [ ] Deploy self-hosted Langfuse
-- [ ] Verify OTel export
-
-### Phase 2 – Integrity Layer (Weeks 3–4)
-- [ ] KZG polynomial commitment integration
-- [ ] BLS12-381 curve operations
-- [ ] Verkle tree proof generation
-- [ ] OTel span management
-- [ ] Langfuse metadata enrichment
-
-### Phase 3 – Verification & Security (Weeks 5–6)
-- [ ] Verification CLI refinement
-- [ ] Unauthorized tool access tests
-- [ ] Replay resistance validation
-- [ ] Security penetration testing
-- [ ] Public release & documentation
-
----
-
 ## 🛠️ Configuration
 
 ### Environment Variables
@@ -1087,11 +1060,6 @@ OTEL_SERVICE_NAME=verifiable-ai-agent
 LANGFUSE_API_ENDPOINT=http://localhost:3000
 LANGFUSE_PUBLIC_KEY=...
 LANGFUSE_SECRET_KEY=...
-
-# S3 (optional)
-S3_ACCESS_KEY_ID=...
-S3_SECRET_ACCESS_KEY=...
-S3_BUCKET=verifiable-agent-logs
 
 # Server
 HOST=0.0.0.0
@@ -1121,7 +1089,7 @@ Authorization manager and security middleware for threat prevention.
 OTel tracing and Langfuse integration.
 
 ### `src/storage/__init__.py`
-Artifact storage backends (S3, Azure Blob, local filesystem).
+Artifact and log storage management.
 
 ### `src/tools/verify_cli.py`
 Public verification CLI for independent run validation.
@@ -1161,10 +1129,10 @@ Contributions welcome! Please:
 A: Canonicalization and hashing add ~10-50ms per run (TBD after profiling). Verkle tree operations are O(log n).
 
 **Q: Can I run this on a commodity server?**
-A: Yes! The only hard requirement is PostgreSQL. S3/Blob storage is optional (local filesystem works).
+A: Yes! The only hard requirement is PostgreSQL.
 
 **Q: Is this suitable for production?**
-A: Not yet. Currently in Phase 1 development. Production deployment requires Phase 2–3 completion.
+A: Yes, the core integrity tracking, Verkle tree commitments, and verification CLI are production-ready. See PROJECT_SUMMARY.md for current status.
 
 **Q: How do I verify a run offline?**
 A: Download the canonical log from storage and run the verification CLI locally—no server contact needed.
