@@ -12,7 +12,7 @@ import base64
 import json
 import sys
 import hashlib
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -247,7 +247,8 @@ def extract(
 @app.command()
 def export_proof(
     canonical_log_path: str = typer.Argument(..., help="Path to the canonical log file"),
-    output: Optional[str] = typer.Argument(None, help="Output file path (default: proof.json)"),
+    expected_root_b64: str = typer.Argument(..., help="Expected root commitment (base64)"),
+    output: Optional[str] = typer.Option(None, "--output", help="Output file path (default: proof.json)"),
     include_events: bool = typer.Option(False, "--include-events", help="Include full events in proof (verbose)"),
     include_log: bool = typer.Option(False, "--include-log", help="Include entire log in proof")
 ) -> None:
@@ -296,7 +297,7 @@ def export_proof(
         # Build proof object
         proof = {
             "version": "1.0",
-            "generated_at": datetime.utcnow().isoformat(),
+            "generated_at": datetime.now(timezone.utc).isoformat(),
             "metadata": {
                 "session_id": session_id,
                 "event_count": len(events),
@@ -309,7 +310,9 @@ def export_proof(
             "verification": {
                 "log_hash_sha256": hashlib.sha256(canonical_log).hexdigest(),
                 "computed_root_b64": computed_root_b64,
-                "verification_timestamp": datetime.utcnow().isoformat(),
+                "expected_root_b64": expected_root_b64,
+                "verification_passed": computed_root_b64 == expected_root_b64,
+                "verification_timestamp": datetime.now(timezone.utc).isoformat(),
             }
         }
         
@@ -336,10 +339,15 @@ def export_proof(
         with open(output_path, "w") as f:
             json.dump(proof, f, indent=2)
         
-        typer.echo(f"✓ Proof exported to {output_path}")
+        # Output verification status
+        verification_status = "✓ Proof exported" if proof["verification"]["verification_passed"] else "✗ Proof exported (FAILED verification)"
+        typer.echo(f"{verification_status} to {output_path}")
         typer.echo(f"  Root commitment: {computed_root_b64[:20]}...")
         typer.echo(f"  Events: {len(events)}")
         typer.echo(f"  Size: {output_path.stat().st_size:,} bytes")
+        if not proof["verification"]["verification_passed"]:
+            typer.echo(f"  [FAILED] Root mismatch - verification failed")
+        
         
     except Exception as e:
         logger.exception("export_proof_failed", error=str(e))

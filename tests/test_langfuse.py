@@ -11,7 +11,7 @@ Tests cover:
 """
 
 import pytest
-from datetime import datetime
+from datetime import datetime, timezone
 from unittest.mock import patch, MagicMock
 
 from src.observability.langfuse_client import (
@@ -150,9 +150,9 @@ class TestEventRecording:
         client = LangfuseClient("test-session")
         trace_id = client.create_trace("agent_run")
         
-        before = datetime.utcnow().isoformat()
+        before = datetime.now(timezone.utc).isoformat()
         client.add_event_to_trace(trace_id, "test", {})
-        after = datetime.utcnow().isoformat()
+        after = datetime.now(timezone.utc).isoformat()
         
         event = client.traces[0]["events"][0]
         assert "timestamp" in event
@@ -423,9 +423,9 @@ class TestTraceFinalization:
         client = LangfuseClient("test-session")
         trace_id = client.create_trace("agent_run")
         
-        before = datetime.utcnow().isoformat()
+        before = datetime.now(timezone.utc).isoformat()
         client.finalize_trace(trace_id)
-        after = datetime.utcnow().isoformat()
+        after = datetime.now(timezone.utc).isoformat()
         
         trace = client.traces[0]
         assert before <= trace["finalized_at"] <= after
@@ -527,7 +527,7 @@ class TestIntegrationScenario:
             metadata={
                 "session_id": session_id,
                 "counter": 0,
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.now(timezone.utc).isoformat()
             }
         )
         

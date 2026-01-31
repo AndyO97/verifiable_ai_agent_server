@@ -13,7 +13,7 @@ Self-hosted deployment: See LANGFUSE_SETUP_GUIDE.md
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 import uuid
 
 import structlog
@@ -68,7 +68,7 @@ class LangfuseClient:
             "name": name,
             "session_id": self.session_id,
             "user_id": user_id or "default",
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "metadata": metadata or {},
             "events": [],
             "cost": {
@@ -115,7 +115,7 @@ class LangfuseClient:
         event = {
             "event_id": str(uuid.uuid4()),
             "name": event_name,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "level": level,
             "data": data,
         }
@@ -279,7 +279,7 @@ class LangfuseClient:
         
         # Mark as finalized
         trace["finalized"] = True
-        trace["finalized_at"] = datetime.utcnow().isoformat()
+        trace["finalized_at"] = datetime.now(timezone.utc).isoformat()
         
         logger.info(
             "trace_finalized",

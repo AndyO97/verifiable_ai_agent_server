@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""
+r"""
 Real-World Demo: Live LLM Agent with Tool Invocation & Integrity Tracking
 ===========================================================================
 
@@ -71,10 +71,16 @@ import hashlib
 import requests
 import re
 import math
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 from dotenv import load_dotenv
+
+# Fix Unicode issues on Windows
+if sys.stdout.encoding != 'utf-8':
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 
 # Color codes
 GREEN = "\033[92m"
@@ -274,23 +280,21 @@ def print_event(event_type: str, content: str, color: str = BLUE) -> None:
 # OPENROUTER API INTERACTION WITH TOOLS
 # ============================================================================
 
-def call_openrouter_with_tools(
+def call_openrouter_simple(
     messages: List[Dict[str, str]],
     api_key: str,
-    model: str = "mistralai/devstral-2512:free",
-    include_tools: bool = True
-) -> Optional[Dict[str, Any]]:
+    model: str = "mistralai/mistral-small-3.1-24b-instruct:free"
+) -> Optional[str]:
     """
-    Call OpenRouter API with tool support.
+    Call OpenRouter API without tools (simple chat).
     
     Args:
         messages: Conversation messages
         api_key: OpenRouter API key
         model: Model to use
-        include_tools: Whether to include tool definitions
     
     Returns:
-        The API response or None if failed
+        The LLM response text or None if failed
     """
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -305,10 +309,6 @@ def call_openrouter_with_tools(
         "max_tokens": 1000,
     }
     
-    if include_tools:
-        data["tools"] = AVAILABLE_TOOLS
-        data["tool_choice"] = "auto"
-    
     try:
         print(f"{CYAN}[Connecting to OpenRouter...]{RESET}")
         response = requests.post(
@@ -318,7 +318,13 @@ def call_openrouter_with_tools(
             timeout=30
         )
         response.raise_for_status()
-        return response.json()
+        result = response.json()
+        
+        if "choices" in result and len(result["choices"]) > 0:
+            return result["choices"][0]["message"]["content"]
+        else:
+            print(f"{RED}[ERROR] Unexpected API response format{RESET}")
+            return None
             
     except requests.exceptions.ConnectionError:
         print(f"{RED}[ERROR] Connection error: Cannot reach OpenRouter{RESET}")
@@ -329,8 +335,20 @@ def call_openrouter_with_tools(
     except requests.exceptions.HTTPError as e:
         if e.response.status_code == 401:
             print(f"{RED}[ERROR] Authentication failed: Invalid OpenRouter API key{RESET}")
+        elif e.response.status_code == 404:
+            print(f"{RED}[ERROR] Model not found: '{model}'{RESET}")
+            print(f"{CYAN}Check available models at: https://openrouter.ai/api/v1/models{RESET}")
+            print(f"{CYAN}Or set OPENROUTER_MODEL environment variable{RESET}")
+        elif e.response.status_code == 429:
+            print(f"{RED}[ERROR] Rate limited: Too many requests{RESET}")
+        elif e.response.status_code == 402:
+            print(f"{RED}[ERROR] Payment required: Check your OpenRouter account balance{RESET}")
         else:
-            print(f"{RED}[ERROR] HTTP Error {e.response.status_code}: Check tool format{RESET}")
+            print(f"{RED}[ERROR] HTTP Error {e.response.status_code}{RESET}")
+            try:
+                print(f"{CYAN}Response: {e.response.text}{RESET}")
+            except:
+                pass
         return None
     except Exception as e:
         print(f"{RED}[ERROR] Error calling OpenRouter: {e}{RESET}")
@@ -347,11 +365,12 @@ def run_real_agent_workflow() -> None:
     # Load environment
     load_dotenv()
     api_key = os.getenv("OPENROUTER_API_KEY")
-    model = os.getenv("OPENROUTER_MODEL", "mistralai/devstral-2512:free")
+    model = os.getenv("OPENROUTER_MODEL", "arcee-ai/trinity-large-preview:free")
     
     if not api_key:
-        print(f"{RED}✗ Error: OPENROUTER_API_KEY not set in .env file{RESET}")
+        print(f"{RED}[ERROR] OPENROUTER_API_KEY not set in .env file{RESET}")
         print(f"{CYAN}Get a free key at: https://openrouter.ai/keys{RESET}")
+        print(f"{CYAN}Note: Free models may require account verification{RESET}")
         return
     
     print_header("REAL-TIME AI AGENT WITH TOOL INVOCATION & INTEGRITY TRACKING")
@@ -404,10 +423,27 @@ def run_real_agent_workflow() -> None:
     accumulator.add_event(event_user_prompt)
     print(f"{GREEN}[OK] Event added to Verkle accumulator{RESET}\n")
     
-    # STEP 3: Agent iterates with tool calls
+    # STEP 3: Agent interaction with tool invocation
     print_subheader("STEP 3: Agent Interaction with Tool Invocation")
     
+    # Build system prompt with tool definitions
+    tool_descriptions = "\n".join([
+        f"- {t['function']['name']}: {t['function']['description']}"
+        for t in AVAILABLE_TOOLS
+    ])
+    
+    system_prompt = f"""You are an intelligent agent with access to the following tools:
+
+{tool_descriptions}
+
+When you need to use a tool, respond with:
+TOOL: tool_name
+ARGS: {{"param1": "value1", "param2": "value2"}}
+
+After each tool call, I will provide the result. Continue using tools as needed, then provide your final answer."""
+    
     messages = [
+        {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt}
     ]
     
@@ -419,45 +455,43 @@ def run_real_agent_workflow() -> None:
         turn += 1
         print(f"{BOLD}Turn {turn}:{RESET}")
         
-        # Call LLM with tools only on first turn
-        response = call_openrouter_with_tools(messages, api_key, model, include_tools=(turn == 1))
+        # Call LLM
+        llm_response = call_openrouter_simple(messages, api_key, model)
         
-        if not response or "choices" not in response:
-            print(f"{RED}[ERROR] No response from LLM{RESET}")
+        if not llm_response:
+            print(f"{RED}[ERROR] No response from LLM on turn {turn}{RESET}")
             return
         
-        choice = response["choices"][0]
-        message_content = choice.get("message", {})
-        
-        # Log LLM response event
+        # Log LLM response
         event_llm_turn = {
             "type": "llm_turn",
             "turn": turn,
+            "content": llm_response,
             "timestamp": datetime.now().isoformat(),
-            "model": model,
-            "stop_reason": choice.get("finish_reason", "unknown"),
         }
         
-        # Check if LLM wants to use tools
-        if choice.get("finish_reason") == "tool_calls" and "tool_calls" in message_content:
-            tool_calls = message_content["tool_calls"]
-            print(f"  LLM requested {len(tool_calls)} tool call(s)\n")
+        event_turn_canonical = canonicalize_json(event_llm_turn)
+        event_turn_hash = hashlib.sha256(event_turn_canonical.encode()).hexdigest()
+        
+        accumulator.add_event(event_llm_turn)
+        print(f"{GREEN}[OK] Turn {turn} logged{RESET}\n")
+        
+        # Check if LLM is requesting a tool call
+        if "TOOL:" in llm_response and "ARGS:" in llm_response:
+            # Parse tool call
+            tool_match = re.search(r"TOOL:\s*(\w+)", llm_response)
+            args_match = re.search(r"ARGS:\s*(\{.*?\})", llm_response, re.DOTALL)
             
-            event_llm_turn["action"] = "tool_invocation"
-            event_llm_turn["tool_calls_count"] = len(tool_calls)
-            
-            # Execute each tool call
-            tool_results = []
-            for tool_call in tool_calls:
-                tool_name = tool_call.get("function", {}).get("name") or tool_call.get("name")
-                tool_args = tool_call.get("function", {}).get("arguments") or tool_call.get("arguments", "{}")
+            if tool_match and args_match:
+                tool_name = tool_match.group(1)
+                try:
+                    tool_args_str = args_match.group(1)
+                    tool_input = json.loads(tool_args_str)
+                except json.JSONDecodeError:
+                    print(f"{RED}[ERROR] Invalid JSON in tool args{RESET}\n")
+                    break
                 
-                if isinstance(tool_args, str):
-                    tool_input = json.loads(tool_args)
-                else:
-                    tool_input = tool_args
-                
-                print(f"  {CYAN}Calling tool: {tool_name}{RESET}")
+                print(f"  {CYAN}LLM requesting tool: {tool_name}{RESET}")
                 print(f"    Input: {tool_input}")
                 
                 # Execute tool
@@ -481,44 +515,28 @@ def run_real_agent_workflow() -> None:
                 accumulator.add_event(event_tool_exec)
                 print(f"{GREEN}[OK] Tool execution added to accumulator{RESET}\n")
                 
-                # Collect tool result for next message
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_call_id": tool_call.get("id"),
-                    "content": tool_result
-                })
-            
-            # Add assistant message with tools and tool results to conversation
-            # Only add assistant message text, not tool calls
-            assistant_text = message_content.get("content", "")
-            if assistant_text:
-                messages.append({"role": "assistant", "content": assistant_text})
-            
-            # Build tool results message
-            tool_results_text = "Tool results:\n" + "\n".join([
-                f"- {tr['tool_call_id']}: {tr['content']}"
-                for tr in tool_results
-            ])
-            
-            messages.append({"role": "user", "content": tool_results_text})
-            
-            event_llm_turn["tool_results"] = len(tool_results)
-            
+                # Add conversation history
+                messages.append({"role": "assistant", "content": llm_response})
+                messages.append({"role": "user", "content": f"Tool result:\n{tool_result}\n\nPlease continue or provide your final answer."})
+            else:
+                print(f"{YELLOW}[WARNING] Tool call format not recognized, treating as final response{RESET}\n")
+                final_response_text = llm_response
+                break
         else:
-            # LLM provided final response
-            content = message_content.get("content", "")
+            # This is the final response
             print(f"  {GREEN}LLM provided final response{RESET}\n")
-            print(f"  {MAGENTA}{content}{RESET}\n")
+            try:
+                print(f"{MAGENTA}{llm_response}{RESET}\n")
+            except UnicodeEncodeError:
+                print(f"{MAGENTA}{llm_response.encode('utf-8', errors='replace').decode('utf-8')}{RESET}\n")
             
-            event_llm_turn["action"] = "final_response"
-            event_llm_turn["response_preview"] = content[:100]
-            final_response_text = content
+            final_response_text = llm_response
             
             # Log final response
             event_final = {
                 "type": "llm_response",
                 "turn": turn,
-                "content": content,
+                "content": llm_response,
                 "timestamp": datetime.now().isoformat(),
             }
             
@@ -527,17 +545,11 @@ def run_real_agent_workflow() -> None:
             print_hash("Final Response Hash", event_final_hash[:32] + "..." + event_final_hash[-8:], GREEN)
             
             accumulator.add_event(event_final)
-            print(f"{GREEN}[OK] Final response added to Verkle accumulator{RESET}\n")
+            print(f"{GREEN}[OK] Final response added to accumulator{RESET}\n")
             break
-        
-        # Log turn
-        event_turn_canonical = canonicalize_json(event_llm_turn)
-        event_turn_hash = hashlib.sha256(event_turn_canonical.encode()).hexdigest()
-        accumulator.add_event(event_llm_turn)
-        print(f"{GREEN}[OK] Turn logged to accumulator\n{RESET}")
     
     if not final_response_text:
-        print(f"{RED}✗ Agent did not produce final response{RESET}")
+        print(f"{RED}[ERROR] Agent did not produce final response{RESET}")
         return
     
     # STEP 4: Finalize and compute KZG commitment
@@ -579,8 +591,8 @@ def run_real_agent_workflow() -> None:
     else:
         print(f"{RED}{BOLD}[FAILED] VERIFICATION FAILED!{RESET}\n")
     
-    # STEP 6: Summary
-    print_subheader("STEP 6: Agent Interaction Summary")
+    # STEP 5: Summary
+    print_subheader("STEP 5: Agent Interaction Summary")
     
     tool_calls_count = len([e for e in all_events if e.get("type") == "tool_execution"])
     
@@ -599,7 +611,6 @@ def run_real_agent_workflow() -> None:
 {BOLD}What This Proves:{RESET}
   - Exact sequence of LLM decisions and tool calls
   - Tool inputs and outputs are tamper-evident
-  - Final response matches what LLM generated
   - Complete agent trace is publicly verifiable
 """)
     
@@ -614,7 +625,7 @@ def run_real_agent_workflow() -> None:
     print_header("[COMPLETE] REAL-TIME AGENT DEMO COMPLETE")
     
     print(f"""{GREEN}Summary:{RESET}
-  - Made REAL OpenRouter API call with tool support
+  - Made REAL OpenRouter API call
   - LLM executed {tool_calls_count} tool call(s)
   - Received genuine final response
   - Tracked all events with SHA-256 hashing
@@ -626,7 +637,7 @@ def run_real_agent_workflow() -> None:
 {CYAN}Root Commitment:{RESET}
   {root_b64}
 
-{CYAN}To verify the agent trace:{RESET}
+{CYAN}To verify the interaction:{RESET}
   python -m src.tools.verify_cli verify real_workflow.jsonl '{root_b64}'
 """)
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""
+r"""
 Real-World Demo: Live LLM Agent with Integrity Tracking
 ========================================================
 
@@ -55,10 +55,16 @@ import os
 import base64
 import hashlib
 import requests
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 from dotenv import load_dotenv
+
+# Fix Unicode issues on Windows
+if sys.stdout.encoding != 'utf-8':
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 
 # Color codes
 GREEN = "\033[92m"
@@ -101,7 +107,7 @@ def print_event(event_type: str, content: str, color: str = BLUE) -> None:
     print(f"{color}[{timestamp}] {BOLD}{event_type}:{RESET} {truncated}")
 
 
-def call_openrouter(prompt: str, api_key: str, model: str = "mistralai/devstral-2512:free") -> Optional[str]:
+def call_openrouter(prompt: str, api_key: str, model: str = "arcee-ai/trinity-large-preview:free") -> Optional[str]:
     """
     Call OpenRouter API with a prompt and return the response.
     
@@ -171,7 +177,7 @@ def run_real_agent_workflow() -> None:
     # Load environment
     load_dotenv()
     api_key = os.getenv("OPENROUTER_API_KEY")
-    model = os.getenv("OPENROUTER_MODEL", "mistralai/devstral-2512:free")
+    model = os.getenv("OPENROUTER_MODEL", "arcee-ai/trinity-large-preview:free")
     
     if not api_key:
         print(f"{RED}✗ Error: OPENROUTER_API_KEY not set in .env file{RESET}")

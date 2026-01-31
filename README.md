@@ -76,8 +76,8 @@ python -m pytest tests/ -v
 # Run all tests (124 tests, ~3-4 minutes)
 python -m pytest tests/ -v
 
-# Quick summary without running (30 seconds)
-python show_progress.py
+# Run all tests with summary (3-4 minutes)
+python run_all_tests.py
 
 # Run specific feature tests (< 1 minute each)
 python -m pytest tests/test_kzg.py -v              # KZG (23 tests)

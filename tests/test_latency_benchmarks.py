@@ -18,7 +18,7 @@ import pytest
 import statistics
 from typing import Callable, List, Tuple
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 
 from src.crypto.verkle import KZGCommitter, VerkleAccumulator
 
@@ -175,7 +175,7 @@ class TestVerkleAccumulatorLatency:
         accumulator = VerkleAccumulator(session_id="bench-001")
         
         def add_event():
-            event = {"action": "test", "timestamp": datetime.utcnow().isoformat()}
+            event = {"action": "test", "timestamp": datetime.now(timezone.utc).isoformat()}
             accumulator.add_event(event)
         
         metrics = LatencyBenchmark.measure(add_event, iterations=50)
@@ -195,7 +195,7 @@ class TestVerkleAccumulatorLatency:
             for i in range(10):
                 accumulator.add_event({
                     "action": f"action_{i}",
-                    "timestamp": datetime.utcnow().isoformat()
+                    "timestamp": datetime.now(timezone.utc).isoformat()
                 })
             # Finalize once per accumulator
             accumulator.finalize()
@@ -217,7 +217,7 @@ class TestVerkleAccumulatorLatency:
             for i in range(50):
                 accumulator.add_event({
                     "action": f"action_{i}",
-                    "timestamp": datetime.utcnow().isoformat()
+                    "timestamp": datetime.now(timezone.utc).isoformat()
                 })
             # Finalize once per accumulator
             accumulator.finalize()
@@ -238,7 +238,7 @@ class TestVerkleAccumulatorLatency:
             for i in range(100):
                 accumulator.add_event({
                     "action": f"action_{i}",
-                    "timestamp": datetime.utcnow().isoformat()
+                    "timestamp": datetime.now(timezone.utc).isoformat()
                 })
             # Finalize once per accumulator
             accumulator.finalize()
@@ -312,7 +312,7 @@ class TestEventPipelineLatency:
             # Add event
             accumulator.add_event({
                 "action": "test_action",
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.now(timezone.utc).isoformat()
             })
             # Finalize to get commitment
             accumulator.finalize()
@@ -334,7 +334,7 @@ class TestEventPipelineLatency:
             for i in range(10):
                 accumulator.add_event({
                     "action": f"action_{i}",
-                    "timestamp": datetime.utcnow().isoformat()
+                    "timestamp": datetime.now(timezone.utc).isoformat()
                 })
             # Single finalize
             accumulator.finalize()
@@ -362,7 +362,7 @@ class TestLatencyRequirements:
         def add_event():
             accumulator.add_event({
                 "action": "test",
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.now(timezone.utc).isoformat()
             })
         
         metrics = LatencyBenchmark.measure(add_event, iterations=100)
@@ -393,7 +393,7 @@ class TestLatencyRequirements:
         def add_event():
             accumulator.add_event({
                 "action": "test",
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.now(timezone.utc).isoformat()
             })
         
         metrics = LatencyBenchmark.measure(add_event, iterations=100)
@@ -452,7 +452,7 @@ class TestLatencyConsistency:
                 for i in range(20):
                     accumulator.add_event({
                         "action": f"action_{i}",
-                        "timestamp": datetime.utcnow().isoformat()
+                        "timestamp": datetime.now(timezone.utc).isoformat()
                     })
                 accumulator.finalize()
             
