@@ -252,8 +252,9 @@ In Langfuse dashboard, you'll see:
   - Root span: agent_run (with session ID and duration)
   - Trace ID for cross-referencing with verification CLI
   - (Child spans visibility depends on instrumentation configuration)
+```
 
-
+**Key Features Demonstrated:**
 - ✅ Real OpenRouter API call (genuine LLM response)
 - ✅ Canonical JSON encoding (RFC 8785 deterministic format)
 - ✅ SHA-256 hashing of events
@@ -264,10 +265,10 @@ In Langfuse dashboard, you'll see:
 
 **Langfuse Integration:**
 The demo automatically exports OpenTelemetry spans to Langfuse if configured. In your Langfuse dashboard, you'll see:
-- Complete trace of the prompt flow
-- LLM token counts and latency
-- Cost analysis for the API call
-- All events with canonical timestamps
+- Root span with session tracking
+- Event sequence with timestamps
+- Complete trace for debugging and auditing
+- (Detailed child spans depend on instrumentation configuration)
 
 ---
 
