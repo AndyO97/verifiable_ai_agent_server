@@ -19,6 +19,9 @@ wheels/
 .installed.cfg
 *.egg
 
+# Local development secrets
+PRD.md
+
 # Virtual environments
 venv/
 ENV/
