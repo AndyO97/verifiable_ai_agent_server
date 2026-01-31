@@ -249,10 +249,9 @@ If Langfuse is running, traces are automatically exported:
   Status: Sent to http://localhost:3000
   
 In Langfuse dashboard, you'll see:
-  - Root span: agent_run
-  - Child spans: model.invoke, event.user_prompt, event.llm_response
-  - Timestamps and duration for each operation
-  (Note: Token counts and detailed metadata shown if the demo sends them)
+  - Root span: agent_run (with session ID and duration)
+  - Trace ID for cross-referencing with verification CLI
+  - (Child spans visibility depends on instrumentation configuration)
 
 
 - ✅ Real OpenRouter API call (genuine LLM response)
@@ -367,10 +366,9 @@ If Langfuse is running, agent trace is automatically exported:
   Status: Sent to http://localhost:3000
 
 In Langfuse dashboard, you'll see:
-  - Root span: agent_run
-  - Child spans: tool_call (3 invocations), model.invoke, final_response
-  - Execution order and duration for each operation
-  - (Detailed metadata and token counts shown if the demo sends them)
+  - Root span: agent_run (with session ID and duration)
+  - Trace ID for cross-referencing with verification CLI
+  - (Child spans visibility depends on instrumentation configuration)
 
 
 - ✅ Real LLM with tool invocation
@@ -428,16 +426,17 @@ docker-compose up -d
 **What you'll see in Langfuse:**
 
 Langfuse receives OpenTelemetry traces showing:
-- Span hierarchy (root spans and child operations)
-- Execution timestamps and duration for each span
-- Event type and operation names
-- Complete trace ID for cross-referencing with verification CLI
+- Root span with trace ID
+- Session/run identifier
+- Total execution duration
+- Trace can be cross-referenced with verification CLI using trace ID
 
-**Additional metadata** (if demo sends it):
-- User/session information
-- Custom tags and attributes
-- Detailed event payloads
-- Tool parameters and results (for agent demo)
+**Optional metadata** (if demo sends it):
+- Custom attributes and tags
+- Event payloads
+- Performance metrics
+
+**Note:** Child span visibility in the dashboard depends on the OpenTelemetry instrumentation configuration. The root span is always visible.
 
 **Key Points:**
 - ✅ **Completely free** - Self-hosted Docker deployment, no cost
