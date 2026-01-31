@@ -581,7 +581,8 @@ Key test modules:
 ### Environment Variables
 
 ```bash
-# PostgreSQL
+# PostgreSQL (optional - for production counter persistence and replay detection)
+# If not configured, counter uses in-memory storage (session data lost on restart)
 POSTGRES_HOST=localhost
 POSTGRES_PORT=5432
 POSTGRES_USER=postgres
@@ -601,6 +602,13 @@ LANGFUSE_SECRET_KEY=...
 HOST=0.0.0.0
 PORT=8000
 ```
+
+**PostgreSQL Details:**
+- ✅ **Fully integrated** for atomic counter persistence (Phase 3 Task 3)
+- ✅ Provides replay attack detection and monotonic counter enforcement
+- ⚠️ **Optional for development**: Demos work without it (counter data not persisted across server restarts)
+- ✅ **Recommended for production**: Enables stateless counter validation and recovery
+- Dependencies: `sqlalchemy`, `psycopg2-binary` (already in pyproject.toml)
 
 ---
 
