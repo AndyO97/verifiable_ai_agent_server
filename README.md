@@ -7,6 +7,7 @@ A high-integrity, self-hosted AI Agent Server built on the Model Context Protoco
 - **Immutable Run Logs**: All agent interactions (prompts, tool calls, model outputs) are canonically encoded and cryptographically committed
 - **Deterministic Verifiability**: Every run produces a single Verkle root commitment that can be independently verified
 - **Replay Resistance**: Sequential monotonic counters, server timestamps, and session IDs prevent unauthorized replay or reordering
+- **Identity-Based Signatures**: Tools cryptographically sign their own outputs using keys derived from their names (BLS12-381), ensuring zero-trust authenticity
 - **Public Verification**: Open-source verification CLI allows third-party validation without trusting the server
 - **Observability**: Full OpenTelemetry integration with Langfuse for trace, latency, and cost visualization
 - **Security-First**: Authorization middleware, prompt injection protection, and zero-trust tool invocation
@@ -130,6 +131,7 @@ real_agent_demo.py           # Demo: Multi-tool agent with tool invocation
 run_all_tests.py             # Run all tests with progress tracking
 pyproject.toml               # uv/pip compatible dependencies
 setup.ps1                    # Automated setup script (Windows)
+examples/ibs_demo.py         # Demo: Identity-Based Signatures (IBS)
 docker-compose.yml           # Langfuse self-hosted deployment
 README.md                    # This file (comprehensive guide)
 PROJECT_SUMMARY.md           # Project status & future work

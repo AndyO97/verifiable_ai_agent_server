@@ -124,6 +124,33 @@ All metadata included in cryptographic commitment.
 - ✅ **Verification does NOT require server access or LLM connectivity**
 - Status: Full CLI implementation complete with extract, verify, and proof-export commands
 
+### 9. Identity-Based Signatures (IBS) ✅
+
+To prevent "man-in-the-middle" attacks where a compromised server might falsify tool outputs, we implement **Identity-Based Signatures**:
+
+- **Concept**: A tool's name (e.g., "weather_api") *is* its Public Key.
+- **Mechanism**: 
+  - Server holds a Master Secret Key ($MSK$).
+  - When a tool is invoked, it receives a derived private key specific to its identity ($SK_{ID}$).
+  - The tool signs its output: $Sig = Sign(SK_{ID}, Output)$.
+- **Verification**: Anyone can verify the signature using only the Master Public Key ($MPK$) and the tool's name.
+- **Guarantee**: Proves that a specific result validly originated from the specific tool invoked by the agent.
+
+### 10. Security & Identity Model
+
+**Q: How do we handle tool identity collisions?**
+- **Strict Uniqueness**: The System strictly enforces unique names for all registered tools. If a second tool tries to register with an existing name (e.g., "calculator"), the system rejects it at startup.
+- **Identity Binding**: Since $Public Key = Tool Name$, unique names guarantee unique cryptographic identities.
+
+**Q: How do we prevent tool impersonation?**
+- **Trusted Middleware (TCB)**: Tools are "untrusted" code and **never possess their own private keys**.
+- **Execution Flow**:
+  1. The **Agent Framework** (Trusted) invokes the tool.
+  2. The tool returns a raw result (unauthenticated).
+  3. The **Integrity Middleware** (Trusted) acquires the ephemeral signer for that specific tool ID.
+  4. The Middleware signs the result.
+- **Result**: A malicious tool cannot "sign" a fake message because it never has access to the signing keys. Only the Framework, which knows exactly which tool it just ran, can authorize the signature.
+
 ---
 
 ## System Architecture & Middleware Positioning

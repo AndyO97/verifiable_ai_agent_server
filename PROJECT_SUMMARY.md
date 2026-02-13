@@ -63,6 +63,19 @@ Phase 3 transitions from **Merkle trees** to **Verkle trees with KZG polynomial 
 | 6. Verification CLI | ✅ Complete | 3 | Public verification |
 | 7. Test Suite (30+) | ✅ Complete* | 4 | Coverage to 158+ tests |
 | 8. Documentation | ✅ Complete | 2 | Setup & usage guides |
+| 9. Identity-Based Signatures | ✅ Complete | 3 | Tool authentication |
+
+### Identity-Based Signatures (IBS) ✅
+
+**Files**: `src/crypto/signatures.py`, `src/security/key_management.py`
+
+**Features**:
+- **BLS12-381 Pairings**: Implemented IBS scheme using efficient bilinear pairings
+- **Identity-Driven Keys**: Tool names (e.g., "calculator") function directly as Public Keys
+- **Automatic Provisioning**: Middleware derives tool keys ($SK_{ID} = MSK \cdot H(ID)$) on-the-fly
+- **Dual Verification**: 
+  - **Root Signature**: Server signs the final Verkle Root
+  - **Event Signatures**: Each tool output is individually signed by that tool's identity
 
 ### KZG Implementation Highlights ✅
 

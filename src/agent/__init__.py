@@ -58,7 +58,13 @@ class MCPServer:
         logger.info("mcp_server_initialized", session_id=session_id)
     
     def register_tool(self, tool: ToolDefinition) -> None:
-        """Register a tool with the server"""
+        """
+        Register a tool with the server.
+        Enforces unique tool names to prevent identity collisions.
+        """
+        if tool.name in self.tools:
+            raise ValueError(f"Tool name collision: '{tool.name}' is already registered. Identities must be unique.")
+            
         self.tools[tool.name] = tool
         logger.info("tool_registered", tool_name=tool.name)
     

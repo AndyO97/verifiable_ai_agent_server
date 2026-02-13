@@ -76,6 +76,15 @@ class OTelSettings(BaseSettings):
     service_version: str = "0.1.0"
 
 
+class SecuritySettings(BaseSettings):
+    """Security and Cryptography settings"""
+    model_config = ConfigDict(env_prefix="SECURITY_", env_file=".env", case_sensitive=False, extra="ignore")
+    
+    # Hex-encoded 32-byte master secret key.
+    # If not provided, a random ephemeral key will be generated.
+    master_secret_key: Optional[str] = None
+
+
 class Settings(BaseSettings):
     """Main application settings"""
     model_config = ConfigDict(env_file=".env", case_sensitive=False)
@@ -90,6 +99,7 @@ class Settings(BaseSettings):
     
     # Crypto
     session_timeout_seconds: int = 3600
+    security: SecuritySettings = SecuritySettings()
     
     # Storage (default: local file system)
     storage_backend: str = "local"  # Options: "local", "s3", "azure"
