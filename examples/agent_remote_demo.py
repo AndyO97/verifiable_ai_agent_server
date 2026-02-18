@@ -13,6 +13,7 @@ import os
 import uuid
 import time
 import json
+import asyncio
 import base64
 from datetime import datetime
 from pathlib import Path
@@ -24,7 +25,7 @@ from src.integrity import IntegrityMiddleware
 from src.observability.langfuse_client import LangfuseClient 
 from src.crypto.verkle import VerkleAccumulator
 from src.config import get_settings
-from examples.secure_mcp_lib import SecureMCPClient
+from src.transport.secure_mcp import SecureMCPClient
 
 # ANSI Colors
 GREEN = "\033[92m"
@@ -49,8 +50,8 @@ def check_langfuse_running():
     except:
         return False
 
-def main():
-    print(f"{BOLD}Starting Secure Remote Tool Agent Demo...{RESET}")
+async def main():
+    print(f"{BOLD}Starting Secure Remote Tool Agent Demo (Async WebSocket)...{RESET}")
     
     # 1. Initialize Integrity & Observability
     middleware = IntegrityMiddleware()
@@ -85,8 +86,8 @@ def main():
     try:
         # Secure Handshake & Provisioning
         # Connects, performs ECDH, provisions IBS keys
-        client.connect_and_provision() 
-        print(f"[Conn] Connected to '{TOOL_NAME}' on {TOOL_HOST}:{TOOL_PORT} (Secure Channel Established)")
+        await client.connect_and_provision() 
+        print(f"[Conn] Connected to '{TOOL_NAME}' on ws://{TOOL_HOST}:{TOOL_PORT} (Secure Channel Established)")
         
         # 3. Agent Workflow
         prompt = "Calculate 100 * 5"
@@ -114,7 +115,7 @@ def main():
         
         # Execute Remote Call (Encrypted + Signed)
         start_time = time.time()
-        response = client.call_tool(input_args, req_id)
+        response = await client.call_tool(input_args, req_id)
         duration = time.time() - start_time
         
         result = response["result"]
@@ -185,10 +186,13 @@ def main():
         import traceback
         traceback.print_exc()
     finally:
-        client.close()
+        await client.close()
         # Ensure trace is finalized if the client supports it
         if langfuse and trace_id and hasattr(langfuse, 'finalize_trace'):
              langfuse.finalize_trace(trace_id)
 
 if __name__ == "__main__":
-    main()
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass

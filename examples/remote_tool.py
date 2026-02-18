@@ -4,19 +4,23 @@ This script mimics a tool running in a SEPARATE environment (e.g., different ser
 It holds its own Identity Key ($SK_{ID}$) and signs its own outputs.
 
 Usage:
-1. Run `python examples/remote_tool.py`
+1. Run with this command in PowerShell:
+    & "./venv/Scripts/python.exe" examples/remote_tool.py
 2. Enter the Tool Name (e.g., "remote_calc")
 3. Paste the Private Key provided by the Key Authority (from the other script)
 4. Use it to process requests and generate signed responses.
+
+
 """
 
 import sys
 import os
+import asyncio
 
 # Add path for imports
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from examples.secure_mcp_lib import secure_listen_and_serve
+from src.transport.secure_mcp import SecureMCPServer
 
 TOOL_NAME = "remote_calc"
 
@@ -36,6 +40,13 @@ def calculator_logic(args):
         return f"Unknown Operation: {op}"
 
 if __name__ == "__main__":
-    # Start the Secure Server (Modularized)
-    # This single line handles ECDH, Provisioning, and Signing Loop
-    secure_listen_and_serve(TOOL_NAME, calculator_logic, port=5555)
+    async def main():
+        # Start the Secure Server (Modularized)
+        server = SecureMCPServer(TOOL_NAME, port=5555)
+        # Note: server.start is an async generator or loop manager
+        await server.start(calculator_logic)
+
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\nStopping...")
