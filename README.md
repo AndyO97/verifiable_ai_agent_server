@@ -5,7 +5,9 @@ A high-integrity, self-hosted AI Agent Server built on the Model Context Protoco
 ## 🎯 Core Features
 
 - **Immutable Run Logs**: All agent interactions (prompts, tool calls, model outputs) are canonically encoded and cryptographically committed
-- **Deterministic Verifiability**: Every run produces a single Verkle root commitment that can be independently verified
+- **Deterministic Verifiability**: Every run produces a single Verkle root commitment (KZG on BLS12-381) that can be independently verified
+- **MCP 2024-11 Compliance**: Full JSON-RPC 2.0 protocol support with proper initialization handshake and request ID correlation
+- **Unified Integrity Middleware**: Single middleware object manages both cryptographic commitment and observability (Langfuse)
 - **Replay Resistance**: Sequential monotonic counters, server timestamps, and session IDs prevent unauthorized replay or reordering
 - **Identity-Based Signatures**: Tools cryptographically sign their own outputs using keys derived from their names (BLS12-381), ensuring zero-trust authenticity
 - **Public Verification**: Open-source verification CLI allows third-party validation without trusting the server
@@ -161,9 +163,9 @@ OLLAMA_SETUP_GUIDE.txt       # Alternative LLM provider guide
 
 The two **flagship demonstrations** showcase the core project capabilities:
 
-### Demo 1: Real Prompt Demo - Integrity Tracking
+### Demo 1: Real Prompt Demo - MCP 2024-11 + Integrity Tracking
 
-**What it shows:** Complete Q&A interaction with cryptographic commitment
+**What it shows:** Complete Q&A interaction with full MCP JSON-RPC 2.0 handshake and cryptographic commitment
 
 ```powershell
 # Setup (one time)
@@ -454,35 +456,73 @@ See [LANGFUSE_SETUP_GUIDE.md](LANGFUSE_SETUP_GUIDE.md) for detailed setup and co
 
 ##  Integrity Architecture
 
-### Event Flow
+### Event Flow with Unified Middleware
 
 ```
 User Prompt
     ↓
-[IntegrityMiddleware] → Canonical Encoding → Verkle Accumulator
+[IntegrityMiddleware] → Canonical Encoding → Verkle Accumulator + Langfuse (auto)
     ↓
-Tool Invocation (with Authorization Check)
+MCP Initialize Handshake (JSON-RPC 2.0)
     ↓
-[IntegrityMiddleware] → Canonical Encoding → Verkle Accumulator
+[IntegrityMiddleware.record_mcp_event()] → Canonical Encoding → Verkle Accumulator + Langfuse
+    ↓
+Tool Invocation (with Authorization & Signature)
+    ↓
+[IntegrityMiddleware] → Canonical Encoding → Verkle Accumulator + Langfuse
     ↓
 LLM Model Output
     ↓
-[IntegrityMiddleware] → Canonical Encoding → Verkle Accumulator
+[IntegrityMiddleware] → Canonical Encoding → Verkle Accumulator + Langfuse
     ↓
-Finalization → Verkle Root Commitment → OTel Span → Langfuse
+Finalization → (root_b64, canonical_log) → OTel Span → Auto-export to Langfuse
+```
+
+### Unified Middleware Pattern
+
+Before: `accumulator = VerkleAccumulator()` + `langfuse = LangfuseClient()` (separate objects)
+
+After: `middleware = IntegrityMiddleware(session_id)` (single object, automatic dual-tracking)
+
+```python
+# Record events with automatic Langfuse integration
+middleware.record_prompt("What is Verkle?", metadata={...})
+middleware.record_tool_input("search", {"query": "..."})
+middleware.record_tool_output("search", result)
+middleware.record_model_output(response_text)
+
+# MCP protocol events (JSON-RPC 2.0)
+middleware.record_mcp_event("mcp_initialize_request", request_dict)
+middleware.record_mcp_event("mcp_tools_call_response", response_dict)
+
+# Finalize and get commitments
+root_b64, canonical_log = middleware.finalize()  # Returns tuple
 ```
 
 ### Deterministic Event Format
 
-Every logged event follows this structure:
+Application events follow this structure:
 
 ```json
 {
   "session_id": "550e8400-e29b-41d4-a716-446655440000",
   "counter": 0,
   "timestamp": "2025-12-08T10:30:45.123456Z",
-  "event_type": "prompt|model_output|tool_input|tool_output",
-  "payload": { /* event-specific data */ }
+  "event_type": "prompt|model_output|tool_input|tool_output|mcp_initialize_request|mcp_tools_call_request|...",
+  "payload": { /* event-specific data */ },
+  "signature": "base64-encoded-ibs-signature",
+  "signer_id": "server|tool_name"
+}
+```
+
+MCP protocol events include the full JSON-RPC 2.0 message:
+
+```json
+{
+  "type": "mcp_initialize_request|mcp_tools_call_response|...",
+  "jsonrpc": { /* complete JSON-RPC 2.0 dict */ },
+  "timestamp": "2025-12-08T10:30:45.123456Z",
+  "session_id": "550e8400-e29b-41d4-a716-446655440000"
 }
 ```
 
@@ -491,18 +531,25 @@ Every logged event follows this structure:
 - **Unicode Normalization**: NFC normalization for determinism
 - **Non-Finite Float Rejection**: NaN, Infinity, -Infinity are forbidden
 - **Sequential Counters**: Atomic increment, persisted in PostgreSQL
+- **JSON-RPC Compliance**: All protocol events wrapped in JSON-RPC 2.0 format
+- **Request ID Correlation**: tools/call requests matched with responses via ID
 
 ---
 
 ## 🌳 Cryptographic Commitments: Verkle Trees with KZG
 
-### Current Implementation: Verkle Trees with KZG Polynomial Commitments
+### Current Implementation: KZG Polynomial Commitments with Unified Middleware
 
-**What we have:** **KZG-based Verkle Commitments** over BLS12-381 elliptic curve
-- Class: `VerkleAccumulator` (in `src/crypto/verkle.py`)
+**What we have:** **Integrated KZG-based Verkle Commitments** over BLS12-381 elliptic curve
+- **Unified IntegrityMiddleware** (in `src/integrity/__init__.py`)
+  - Owns VerkleAccumulator and optional LangfuseClient
+  - Single initialization: `middleware = IntegrityMiddleware(session_id)`
+  - Methods: `record_prompt()`, `record_model_output()`, `record_tool_input/output()`, `record_mcp_event()`
+  - Returns: `Tuple[str, bytes]` from `finalize()` (root_b64, canonical_log_bytes)
+- **Event Accumulation** → **SHA-256 Hashing** → **KZG Commitments** → **Single Root
 - Algorithm: KZG polynomial commitments with BLS12-381 pairing-friendly curves
-- Status: ✅ **Fully functional and tested** (23 KZG tests passing)
-- Implementation: Canonically-encoded events → SHA-256 hashing → KZG polynomial commitments → single root commitment
+- Status: ✅ **Fully functional and tested** (128+ tests passing, 23 KZG tests)
+- Integration: Automatic Langfuse export with graceful fallback if unavailable
 
 ### Key Properties
 
@@ -877,28 +924,49 @@ PORT=8000
 ## 📚 Key Modules
 
 ### `src/crypto/encoding.py`
-RFC 8785 canonical JSON encoder with deterministic serialization.
+RFC 8785 canonical JSON encoder with deterministic serialization and support for event normalization.
 
 ### `src/crypto/verkle.py`
-Verkle tree accumulator using KZG commitments over BLS12-381 elliptic curve.
+Verkle tree accumulator using KZG commitments over BLS12-381 elliptic curve. Produces tamper-proof root commitments.
 
-### `src/integrity/__init__.py`
-IntegrityMiddleware for capturing and committing all agent interactions.
+### `src/integrity/__init__.py` (Refactored)
+**Unified IntegrityMiddleware**: Manages both VerkleAccumulator and optional LangfuseClient
+- Single initialization with automatic Langfuse detection
+- Methods: `record_prompt()`, `record_model_output()`, `record_tool_input/output()`, `record_mcp_event()`
+- Automatic dual-tracking: Events logged to both accumulator and Langfuse simultaneously
+- Returns tuple from `finalize()`: `(root_b64, canonical_log_bytes)`
+- Zero boilerplate in demos (single middleware object instead of 3 separate ones)
 
-### `src/agent/__init__.py`
-MCP server runtime with tool definition and invocation.
+### `src/transport/jsonrpc_protocol.py` (New)
+JSON-RPC 2.0 protocol implementation with MCP 2024-11 compliance:
+- Standard protocol versioning
+- Request/response correlation with IDs
+- Initialization handshake
+- Error codes per JSON-RPC 2.0 specification
+- Batch request support
+
+### `src/transport/mcp_protocol_adapter.py` (New)
+Adapter bridging MCPServer with JSON-RPC 2.0 protocol layer. Handles method routing and MCP specification compliance.
+
+### `src/agent/__init__.py` (Enhanced)
+MCP server runtime with:
+- Tool definition, registration, and invocation
+- Resource management (files, audit logs)
+- Prompt templates with argument rendering
+- Server capabilities advertisement
+- Notification system for event subscription
 
 ### `src/security/__init__.py`
-Authorization manager and security middleware for threat prevention.
+Authorization manager and security middleware for threat prevention. Tool whitelist enforcement.
 
 ### `src/observability/__init__.py`
-OTel tracing and Langfuse integration.
+OTel tracing and Langfuse integration. Automatic OTel span export when Langfuse is configured.
 
 ### `src/storage/__init__.py`
 Artifact and log storage management.
 
 ### `src/tools/verify_cli.py`
-Public verification CLI for independent run validation.
+Public verification CLI for independent run validation. Three commands: `verify`, `extract`, `export-proof`.
 
 ---
 
