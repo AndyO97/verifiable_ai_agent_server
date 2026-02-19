@@ -10,9 +10,10 @@ Supports LLM-integrated agent loops with OpenRouter and Ollama.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, Type
 
 import structlog
+from pydantic import BaseModel, ValidationError, create_model
 
 if TYPE_CHECKING:
     from src.integrity import IntegrityMiddleware
@@ -39,8 +40,28 @@ class ToolDefinition:
     
     def validate_input(self, args: dict[str, Any]) -> bool:
         """Validate input against schema"""
-        # TODO: Use Pydantic validation
-        return True
+        try:
+            if isinstance(self.input_schema, type) and issubclass(self.input_schema, BaseModel):
+                self.input_schema(**args)
+                return True
+            
+            # If schema is a dict of types (like in tests), create dynamic model
+            if isinstance(self.input_schema, dict):
+                # Convert simplified schema to Pydantic field definitions
+                fields = {
+                    k: (v, ...) 
+                    for k, v in self.input_schema.items() 
+                    if isinstance(v, type)
+                }
+                if fields:
+                    DynamicModel = create_model(f"{self.name}Input", **fields)
+                    DynamicModel(**args)
+                    return True
+                
+            return True
+        except ValidationError as e:
+            logger.warning("tool_input_validation_failed", tool=self.name, error=str(e))
+            return False
 
 
 class MCPServer:
@@ -48,11 +69,15 @@ class MCPServer:
     Simplified MCP-compatible server for agent message routing.
     Manages tool definitions and coordinates with integrity middleware.
     
-    TODO (Phase 2): Implement Verifiable MCP Transport (HTTP/WebSocket).
-    NOTE: Standard FastMCP abstracts serialization too much for our cryptographic 
-    needs (Canonicalization & IBS Signatures). We should continue using 
-    our custom SecureMCPClient adapter (src/transport/secure_mcp.py) 
-    to maintain byte-level control for the Verkle Tree.
+    Features:
+    - Tool Registry: Manages local tool definitions and schemas.
+    - Input Validation: Enforces Pydantic schemas for reliable execution.
+    - Secure Transport Integration: Designed to work with `SecureMCPClient` 
+      (src/transport/secure_mcp.py) for verifiable remote tool execution over WebSockets.
+
+    NOTE: We use a custom transport layer instead of standard FastMCP to ensure
+    byte-level canonicalization required for Verkle Tree commitments and 
+    Identity-Based Signatures (IBS).
     """
     
     def __init__(self, session_id: str):
