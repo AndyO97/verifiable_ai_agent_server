@@ -10,6 +10,7 @@ Supports LLM-integrated agent loops with OpenRouter and Ollama.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Optional, Type
 
 import structlog
@@ -39,7 +40,11 @@ class ToolDefinition:
         self.handler = handler
     
     def validate_input(self, args: dict[str, Any]) -> bool:
-        """Validate input against schema"""
+        """Validate input against schema.
+        
+        Security: Enforces contract boundaries by validating type safety and structure,
+        preventing injection attacks and ensuring auditability of tool invocations.
+        """
         try:
             if isinstance(self.input_schema, type) and issubclass(self.input_schema, BaseModel):
                 self.input_schema(**args)
@@ -64,6 +69,135 @@ class ToolDefinition:
             return False
 
 
+class Resource:
+    """Schema for a resource exposed by the server.
+    
+    Resources represent files, data sources, or other artifacts that tools
+    may reference but do not directly execute.
+    """
+    
+    def __init__(
+        self,
+        uri: str,
+        name: str,
+        description: str,
+        mime_type: str = "text/plain"
+    ):
+        self.uri = uri
+        self.name = name
+        self.description = description
+        self.mime_type = mime_type
+    
+    def read(self) -> str:
+        """Read the resource content. Override in subclasses."""
+        raise NotImplementedError("Subclasses must implement read()")
+
+
+class VerificationAuditLogResource(Resource):
+    """Example resource: audit log of all verifications in session"""
+    
+    def __init__(self, session_id: str):
+        self.session_id = session_id
+        super().__init__(
+            uri=f"audit://verification-log/{session_id}",
+            name="Verification Audit Log",
+            description="Records of all cryptographic verifications performed in this session",
+            mime_type="application/json"
+        )
+        self.entries: list[dict[str, Any]] = []
+    
+    def add_entry(self, proof_type: str, result: str, details: dict[str, Any]) -> None:
+        """Log a verification entry"""
+        self.entries.append({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "proof_type": proof_type,
+            "result": result,
+            "details": details
+        })
+    
+    def read(self) -> str:
+        """Return audit log as JSON"""
+        import json
+        return json.dumps({
+            "session_id": self.session_id,
+            "verifications": self.entries
+        }, indent=2)
+
+
+class Prompt:
+    """Schema for a reusable prompt template.
+    
+    Prompts are named templates with placeholders that can be rendered
+    with arguments to generate consistent, reproducible LLM inputs.
+    """
+    
+    def __init__(
+        self,
+        name: str,
+        description: str,
+        template: str,
+        arguments: dict[str, str]
+    ):
+        self.name = name
+        self.description = description
+        self.template = template  # Template with {arg} placeholders
+        self.arguments = arguments  # Argument schemas
+    
+    def render(self, arguments: dict[str, str]) -> str:
+        """Render template with provided arguments"""
+        try:
+            return self.template.format(**arguments)
+        except KeyError as e:
+            raise ValueError(f"Missing required argument: {e}")
+
+
+class VerificationExplanationPrompt(Prompt):
+    """Example prompt: ask LLM to explain why a proof is valid"""
+    
+    def __init__(self):
+        super().__init__(
+            name="explain_verification",
+            description="Generates a cryptographic explanation of why a proof is valid",
+            template="""You are a cryptography expert. Explain why the {proof_type} proof is cryptographically sound.
+
+Consider:
+- The commitment scheme used
+- Security assumptions required
+- The verification algorithm steps
+
+Proof Details:
+{proof_details}
+
+Provide a clear, technical explanation suitable for a security audit.""",
+            arguments={
+                "proof_type": "Type of proof (verkle, ibs, kzg, etc.",
+                "proof_details": "Detailed information about the specific proof"
+            }
+        )
+
+
+class AuditSummaryPrompt(Prompt):
+    """Example prompt: summarize all audits from log"""
+    
+    def __init__(self):
+        super().__init__(
+            name="audit_summary",
+            description="Generates a summary of all verifications in an audit log",
+            template="""Based on the following verification audit log, provide a security summary:
+
+{audit_log}
+
+Include:
+- Number of successful verifications
+- Proof types used
+- Any patterns or concerns
+- Overall security posture assessment""",
+            arguments={
+                "audit_log": "JSON-formatted verification audit log"
+            }
+        )
+
+
 class MCPServer:
     """
     Simplified MCP-compatible server for agent message routing.
@@ -72,6 +206,10 @@ class MCPServer:
     Features:
     - Tool Registry: Manages local tool definitions and schemas.
     - Input Validation: Enforces Pydantic schemas for reliable execution.
+    - Resource Management: Exposes files and data sources for tool reference.
+    - Prompt Templates: Provides reusable LLM prompt templates.
+    - Server Capabilities: Advertises MCP compliance and supported features.
+    - Notification System: Sends events to connected clients.
     - Secure Transport Integration: Designed to work with `SecureMCPClient` 
       (src/transport/secure_mcp.py) for verifiable remote tool execution over WebSockets.
 
@@ -83,8 +221,60 @@ class MCPServer:
     def __init__(self, session_id: str):
         self.session_id = session_id
         self.tools: dict[str, ToolDefinition] = {}
+        self.resources: dict[str, Resource] = {}
+        self.prompts: dict[str, Prompt] = {}
+        self.notification_handlers: list[callable] = []
+        
+        # Register example resources and prompts
+        audit_log_resource = VerificationAuditLogResource(session_id)
+        self.register_resource(audit_log_resource)
+        
+        self.register_prompt(VerificationExplanationPrompt())
+        self.register_prompt(AuditSummaryPrompt())
         
         logger.info("mcp_server_initialized", session_id=session_id)
+    
+    def get_capabilities(self) -> dict[str, Any]:
+        """Advertise server capabilities per MCP specification.
+        
+        Returns compliance information for protocol version 2024-11.
+        """
+        return {
+            "protocolVersion": "2024-11",
+            "capabilities": {
+                "tools": {
+                    "enabled": True,
+                    "count": len(self.tools)
+                },
+                "resources": {
+                    "enabled": True,
+                    "count": len(self.resources)
+                },
+                "prompts": {
+                    "enabled": True,
+                    "count": len(self.prompts)
+                },
+                "notifications": {
+                    "enabled": True,
+                    "supportedTypes": [
+                        "tool_executed",
+                        "resource_accessed",
+                        "verification_complete"
+                    ]
+                },
+                "sampling": False,  # Integrated LLM client, no sampling needed
+            },
+            "serverInfo": {
+                "name": "Crypto Protocols MCP Server",
+                "version": "1.0.0",
+                "features": [
+                    "byte-level-canonicalization",
+                    "verkle-tree-commitments",
+                    "identity-based-signatures"
+                ]
+            }
+        }
+    
     
     def register_tool(self, tool: ToolDefinition) -> None:
         """
@@ -96,6 +286,26 @@ class MCPServer:
             
         self.tools[tool.name] = tool
         logger.info("tool_registered", tool_name=tool.name)
+        self.send_notification("tool_registered", {"tool_name": tool.name})
+    
+    def register_resource(self, resource: Resource) -> None:
+        """Register a resource with the server."""
+        if resource.uri in self.resources:
+            raise ValueError(f"Resource URI collision: '{resource.uri}' is already registered.")
+        
+        self.resources[resource.uri] = resource
+        logger.info("resource_registered", resource_uri=resource.uri)
+        self.send_notification("resource_registered", {"resource_uri": resource.uri})
+    
+    def register_prompt(self, prompt: Prompt) -> None:
+        """Register a prompt template with the server."""
+        if prompt.name in self.prompts:
+            raise ValueError(f"Prompt name collision: '{prompt.name}' is already registered.")
+        
+        self.prompts[prompt.name] = prompt
+        logger.info("prompt_registered", prompt_name=prompt.name)
+        self.send_notification("prompt_registered", {"prompt_name": prompt.name})
+    
     
     def list_tools(self) -> list[dict[str, Any]]:
         """List all available tools (schema only, no capabilities exposed)"""
@@ -107,6 +317,73 @@ class MCPServer:
             }
             for tool in self.tools.values()
         ]
+    
+    def list_resources(self) -> list[dict[str, Any]]:
+        """List all available resources (MCP-compliant format)"""
+        return [
+            {
+                "uri": resource.uri,
+                "name": resource.name,
+                "description": resource.description,
+                "mimeType": resource.mime_type
+            }
+            for resource in self.resources.values()
+        ]
+    
+    def read_resource(self, resource_uri: str) -> str:
+        """Read a resource by URI"""
+        if resource_uri not in self.resources:
+            raise ValueError(f"Resource not found: {resource_uri}")
+        
+        resource = self.resources[resource_uri]
+        content = resource.read()
+        logger.info("resource_accessed", resource_uri=resource_uri)
+        self.send_notification("resource_accessed", {"resource_uri": resource_uri})
+        return content
+    
+    def list_prompts(self) -> list[dict[str, Any]]:
+        """List all available prompt templates (MCP-compliant format)"""
+        return [
+            {
+                "name": prompt.name,
+                "description": prompt.description,
+                "arguments": prompt.arguments
+            }
+            for prompt in self.prompts.values()
+        ]
+    
+    def call_prompt(self, prompt_name: str, arguments: dict[str, str]) -> str:
+        """Evaluate a prompt template with provided arguments"""
+        if prompt_name not in self.prompts:
+            raise ValueError(f"Prompt not found: {prompt_name}")
+        
+        prompt = self.prompts[prompt_name]
+        rendered = prompt.render(arguments)
+        logger.info("prompt_called", prompt_name=prompt_name)
+        self.send_notification("prompt_called", {"prompt_name": prompt_name})
+        return rendered
+    
+    def send_notification(self, notification_type: str, data: dict[str, Any]) -> None:
+        """Send a notification to all subscribed clients"""
+        notification = {
+            "type": notification_type,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "sessionId": self.session_id,
+            "data": data
+        }
+        logger.info("notification_sent", notification_type=notification_type)
+        
+        for handler in self.notification_handlers:
+            try:
+                handler(notification)
+            except Exception as e:
+                logger.exception("notification_handler_error", error=str(e))
+    
+    def subscribe_notifications(self, handler: callable) -> None:
+        """Subscribe a handler to receive server notifications"""
+        self.notification_handlers.append(handler)
+        logger.info("notification_subscriber_registered")
+    
     
     def invoke_tool(self, tool_name: str, args: dict[str, Any]) -> Any:
         """Invoke a tool by name with given arguments"""
@@ -120,7 +397,9 @@ class MCPServer:
             raise ValueError(f"Invalid input for tool {tool_name}")
         
         # Execute handler
-        return tool.handler(**args)
+        result = tool.handler(**args)
+        self.send_notification("tool_executed", {"tool_name": tool_name, "status": "success"})
+        return result
 
 
 class AIAgent:

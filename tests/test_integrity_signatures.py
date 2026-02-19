@@ -20,18 +20,19 @@ def test_integrity_chain_signatures():
     middleware.record_model_output("The result is 3")
     
     # 3. Finalize
-    result = middleware.finalize()
+    root_b64, canonical_log = middleware.finalize()
     
     # 4. Verification Check
     print("\n--- Final Proof ---")
-    print(json.dumps(result, indent=2))
+    print(f"Root Commitment: {root_b64}")
+    print(f"Canonical Log Length: {len(canonical_log)} bytes")
     
-    assert "root_signature" in result
-    assert "server_mpk" in result
+    assert isinstance(root_b64, str)
+    assert isinstance(canonical_log, bytes)
     
     # 5. Check events inside accumulator for signatures
     print("\n--- Event Log ---")
-    events = middleware.verkle_accumulator.events
+    events = middleware.accumulator.events
     for ev in events:
         assert "signature" in ev, f"Event {ev['counter']} missing signature"
         assert "signer_id" in ev, f"Event {ev['counter']} missing signer_id"

@@ -25,7 +25,7 @@ class TestIntegrityMiddleware:
         ret_session = middleware.record_prompt("Test prompt")
         
         assert ret_session == session_id
-        assert len(middleware.verkle_accumulator.events) == 1
+        assert len(middleware.accumulator.events) == 1
         assert middleware.counter == 1
     
     def test_record_model_output(self, session_id):
@@ -35,7 +35,7 @@ class TestIntegrityMiddleware:
         middleware.record_prompt("Test")
         middleware.record_model_output("Response")
         
-        assert len(middleware.verkle_accumulator.events) == 2
+        assert len(middleware.accumulator.events) == 2
         assert middleware.counter == 2
     
     def test_record_tool_invocations(self, session_id):
@@ -47,7 +47,7 @@ class TestIntegrityMiddleware:
         middleware.record_tool_output("calculator", 3)
         middleware.record_model_output("The result is 3")
         
-        assert len(middleware.verkle_accumulator.events) == 4
+        assert len(middleware.accumulator.events) == 4
         assert middleware.counter == 4
     
     def test_finalization(self, session_id):
@@ -57,12 +57,11 @@ class TestIntegrityMiddleware:
         middleware.record_prompt("Test")
         middleware.record_model_output("Done")
         
-        result = middleware.finalize()
+        root_b64, canonical_log = middleware.finalize()
         
-        assert result["session_id"] == session_id
-        assert "verkle_root_b64" in result
-        assert "canonical_log_hash" in result
-        assert result["event_count"] == 2
+        assert isinstance(root_b64, str)
+        assert isinstance(canonical_log, bytes)
+        assert len(middleware.accumulator.events) == 2
         assert middleware.finalized
     
     def test_no_events_after_finalization(self, session_id):

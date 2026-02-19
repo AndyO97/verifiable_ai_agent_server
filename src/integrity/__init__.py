@@ -1,12 +1,15 @@
 """
 Integrity Middleware - captures and commits all agent interactions
+
+Unified middleware that records both application events and MCP protocol events
+into a single Verkle accumulator with integrated Langfuse observability.
 """
 
 import hashlib
 import uuid
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
 
 import structlog
 
@@ -14,6 +17,7 @@ from src.crypto.encoding import CanonicalEncoder
 from src.crypto.verkle import VerkleAccumulator
 from src.security.key_management import KeyAuthority, ToolSigner
 from src.config import get_settings
+from src.observability.langfuse_client import LangfuseClient
 
 logger = structlog.get_logger(__name__)
 
@@ -32,9 +36,13 @@ class IntegrityEvent:
 
 class IntegrityMiddleware:
     """
-    Middleware that ensures all agent interactions are canonically encoded,
-    monotonically sequenced, and cryptographically committed.
+    Unified middleware that ensures all agent interactions (both application events
+    and MCP protocol events) are canonically encoded, monotonically sequenced, and
+    cryptographically committed.
     
+    Features:
+    - Integrated Verkle accumulator for all events
+    - Integrated Langfuse observability (optional)
     - Enforces sequential counter with atomic increment
     - Ensures server-generated timestamps from trusted clock
     - Maintains replay-resistance metadata
@@ -43,7 +51,7 @@ class IntegrityMiddleware:
     
     def __init__(self, session_id: Optional[str] = None):
         self.session_id = session_id or str(uuid.uuid4())
-        self.verkle_accumulator = VerkleAccumulator(self.session_id)
+        self.accumulator = VerkleAccumulator(self.session_id)
         self.counter = 0
         self.finalized = False
         
@@ -59,7 +67,37 @@ class IntegrityMiddleware:
         # Cache for tool signers
         self.tool_signers: dict[str, ToolSigner] = {}
         
+        # Initialize Langfuse client (optional observability)
+        self.langfuse_client: Optional[LangfuseClient] = None
+        self.trace_id: Optional[str] = None
+        self._initialize_langfuse()
+        
         logger.info("integrity_middleware_initialized", session_id=self.session_id)
+    
+    def _initialize_langfuse(self) -> None:
+        """Initialize Langfuse if available"""
+        try:
+            # Check if Langfuse server is running
+            import requests
+            response = requests.get("http://localhost:3000/api/public/health", timeout=1)
+            if response.status_code != 200:
+                logger.debug("langfuse_server_not_available")
+                return
+            
+            self.langfuse_client = LangfuseClient(self.session_id)
+            self.trace_id = self.langfuse_client.create_trace(
+                name="agent_run_with_mcp",
+                metadata={
+                    "protocol_version": "MCP-2024-11",
+                    "jsonrpc": "2.0",
+                    "session_id": self.session_id
+                }
+            )
+            logger.info("langfuse_initialized", trace_id=self.trace_id)
+        except Exception as e:
+            logger.debug("langfuse_initialization_failed", error=str(e))
+            self.langfuse_client = None
+            self.trace_id = None
     
     def _get_signer(self, identity: str) -> ToolSigner:
         """Get or provision a signer for an identity"""
@@ -109,7 +147,15 @@ class IntegrityMiddleware:
         
         self.counter += 1
         event_dict = asdict(event)
-        self.verkle_accumulator.add_event(event_dict)
+        self.accumulator.add_event(event_dict)
+        
+        # Log to Langfuse if available
+        if self.langfuse_client and self.trace_id:
+            self.langfuse_client.add_event_to_trace(
+                self.trace_id,
+                "user_prompt",
+                {"prompt": prompt_text, **(metadata or {})}
+            )
         
         logger.info("prompt_recorded", session_id=self.session_id, counter=event.counter)
         return event.session_id
@@ -135,7 +181,15 @@ class IntegrityMiddleware:
         
         self.counter += 1
         event_dict = asdict(event)
-        self.verkle_accumulator.add_event(event_dict)
+        self.accumulator.add_event(event_dict)
+        
+        # Log to Langfuse if available
+        if self.langfuse_client and self.trace_id:
+            self.langfuse_client.add_event_to_trace(
+                self.trace_id,
+                "model_output",
+                {"output": output_text, **(metadata or {})}
+            )
         
         logger.info("model_output_recorded", session_id=self.session_id, counter=event.counter)
     
@@ -160,7 +214,15 @@ class IntegrityMiddleware:
         
         self.counter += 1
         event_dict = asdict(event)
-        self.verkle_accumulator.add_event(event_dict)
+        self.accumulator.add_event(event_dict)
+        
+        # Log to Langfuse if available
+        if self.langfuse_client and self.trace_id:
+            self.langfuse_client.add_event_to_trace(
+                self.trace_id,
+                "tool_input",
+                {"tool": tool_name, "args": input_args}
+            )
         
         logger.info("tool_input_recorded", session_id=self.session_id, tool=tool_name, counter=event.counter)
     
@@ -196,47 +258,111 @@ class IntegrityMiddleware:
         
         self.counter += 1
         event_dict = asdict(event)
-        self.verkle_accumulator.add_event(event_dict)
+        self.accumulator.add_event(event_dict)
+        
+        # Log to Langfuse if available
+        if self.langfuse_client and self.trace_id:
+            self.langfuse_client.add_event_to_trace(
+                self.trace_id,
+                "tool_output",
+                {"tool": tool_name, "result": result}
+            )
         
         logger.info("tool_output_recorded", session_id=self.session_id, tool=tool_name, counter=event.counter)
     
-    def finalize(self) -> dict[str, Any]:
+    def record_mcp_event(self, event_type: str, jsonrpc_data: dict[str, Any]) -> None:
+        """
+        Record an MCP JSON-RPC 2.0 protocol event.
+        
+        These events track the protocol layer (initialize, tools/call, etc.)
+        and are part of the unified Verkle-accumulated log.
+        
+        Args:
+            event_type: Type of MCP event (e.g., "mcp_initialize_request", "mcp_tools_call_response")
+            jsonrpc_data: The complete JSON-RPC 2.0 request or response dict
+        """
+        if self.finalized:
+            raise RuntimeError("Cannot record events after finalization")
+        
+        # MCP events are protocol-level, not application-level, so we add them directly
+        event_dict = {
+            "type": event_type,
+            "jsonrpc": jsonrpc_data,
+            "timestamp": self._get_server_timestamp(),
+            "session_id": self.session_id,
+        }
+        
+        self.accumulator.add_event(event_dict)
+        
+        # Log to Langfuse if available
+        if self.langfuse_client and self.trace_id:
+            self.langfuse_client.add_event_to_trace(
+                self.trace_id,
+                event_type,
+                event_dict
+            )
+        
+        logger.info("mcp_event_recorded", session_id=self.session_id, event_type=event_type)
+    
+    def finalize(self) -> Tuple[str, bytes]:
         """
         Finalize the run and commit all events to Verkle tree.
-        Returns metadata including root commitment and hash.
+        Returns: (root_b64, canonical_log_bytes)
         """
         if self.finalized:
             raise RuntimeError("Run already finalized")
         
         # Finalize Verkle tree
-        root = self.verkle_accumulator.finalize()
-        root_b64 = self.verkle_accumulator.get_root_b64()
+        root = self.accumulator.finalize()
+        root_b64 = self.accumulator.get_root_b64()
         
         # Sign the Verkle Root (using KZG commitment bytes)
-        # We need the raw bytes. base64 decode is safest way to get them from public property
         import base64
         root_bytes = base64.b64decode(root_b64)
         root_signature = self.authority.sign_root(root_bytes)
         
         # Get canonical log
-        canonical_log = self.verkle_accumulator.get_canonical_log()
-        log_hash = hashlib.sha256(canonical_log).hexdigest()
+        canonical_log = self.accumulator.get_canonical_log()
+        if isinstance(canonical_log, str):
+            canonical_log_bytes = canonical_log.encode('utf-8')
+        else:
+            canonical_log_bytes = canonical_log
+        
+        log_hash = hashlib.sha256(canonical_log_bytes).hexdigest()
+        
+        # Finalize Langfuse trace if it exists
+        if self.langfuse_client and self.trace_id:
+            try:
+                self.langfuse_client.add_event_to_trace(
+                    self.trace_id,
+                    "commitment_finalized",
+                    {
+                        "verkle_root": root_b64,
+                        "root_signature": str(root_signature),
+                        "canonical_log_hash": log_hash,
+                        "event_count": len(self.accumulator.events),
+                        "verified": True
+                    }
+                )
+                self.langfuse_client.finalize_trace(self.trace_id)
+            except Exception as e:
+                logger.warning("langfuse_finalize_failed", error=str(e))
         
         self.finalized = True
         
-        result = {
+        metadata = {
             "session_id": self.session_id,
             "verkle_root_b64": root_b64,
             "root_signature": str(root_signature),
             "server_mpk": str(self.authority.get_public_params()),
             "canonical_log_hash": log_hash,
-            "event_count": len(self.verkle_accumulator.events),
+            "event_count": len(self.accumulator.events),
             "finalized_at": self._get_server_timestamp()
         }
         
-        logger.info("run_finalized", **result)
-        return result
+        logger.info("run_finalized", **metadata)
+        return (root_b64, canonical_log_bytes)
     
     def get_canonical_log(self) -> bytes:
         """Get the entire canonical log (for storage)"""
-        return self.verkle_accumulator.get_canonical_log()
+        return self.accumulator.get_canonical_log()
