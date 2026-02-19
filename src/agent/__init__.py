@@ -2,7 +2,7 @@
 AI Agent Server with MCP-compatible tool routing
 Implements the core agent runtime with tool handling and LLM integration.
 
-Phase 2: LLM-integrated agent loop with Ollama support.
+Supports LLM-integrated agent loops with OpenRouter and Ollama.
 - Records all LLM interactions in integrity middleware
 - Handles multi-turn tool calling
 - Validates tools through security middleware
@@ -48,7 +48,11 @@ class MCPServer:
     Simplified MCP-compatible server for agent message routing.
     Manages tool definitions and coordinates with integrity middleware.
     
-    TODO (Phase 2): Integrate with actual FastMCP library for full HTTP/WebSocket support.
+    TODO (Phase 2): Implement Verifiable MCP Transport (HTTP/WebSocket).
+    NOTE: Standard FastMCP abstracts serialization too much for our cryptographic 
+    needs (Canonicalization & IBS Signatures). We should continue using 
+    our custom SecureMCPClient adapter (src/transport/secure_mcp.py) 
+    to maintain byte-level control for the Verkle Tree.
     """
     
     def __init__(self, session_id: str):
@@ -58,7 +62,13 @@ class MCPServer:
         logger.info("mcp_server_initialized", session_id=session_id)
     
     def register_tool(self, tool: ToolDefinition) -> None:
-        """Register a tool with the server"""
+        """
+        Register a tool with the server.
+        Enforces unique tool names to prevent identity collisions.
+        """
+        if tool.name in self.tools:
+            raise ValueError(f"Tool name collision: '{tool.name}' is already registered. Identities must be unique.")
+            
         self.tools[tool.name] = tool
         logger.info("tool_registered", tool_name=tool.name)
     

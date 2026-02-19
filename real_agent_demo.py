@@ -24,7 +24,7 @@ Run with these commands in PowerShell:
   python real_agent_demo.py
 
 Or as one line:
-  & .\venv\Scripts\Activate.ps1; python real_agent_demo.py
+  & ".\venv\Scripts\Activate.ps1"; python real_agent_demo.py
 
 ================================================================================
                     HOW THIS DIFFERS FROM real_prompt_demo.py
@@ -722,3 +722,5 @@ After each tool call, I will provide the result. Continue using tools as needed,
 
 if __name__ == "__main__":
     run_real_agent_workflow()
+    # Note: If running verification manually, be sure to invoke the CLI as a module:
+    # python -m src.tools.verify_cli verify real_workflow.jsonl <ROOT_HASH>
