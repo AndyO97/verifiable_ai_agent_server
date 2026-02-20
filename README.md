@@ -138,7 +138,6 @@ docker-compose.yml           # Langfuse self-hosted deployment
 README.md                    # This file (comprehensive guide)
 PROJECT_SUMMARY.md           # Project status & future work
 PROPOSAL.md                  # Technical approach & architecture
-LANGFUSE_SETUP_GUIDE.md      # Observability deployment guide
 OLLAMA_SETUP_GUIDE.txt       # Alternative LLM provider guide
 .env.example                 # Environment variables template
 ```
@@ -456,47 +455,64 @@ See [LANGFUSE_SETUP_GUIDE.md](LANGFUSE_SETUP_GUIDE.md) for detailed setup and co
 
 ##  Integrity Architecture
 
-### Event Flow with Unified Middleware
+### Event Flow with Hierarchical Verkle Middleware
 
 ```
 User Prompt
     ↓
-[IntegrityMiddleware] → Canonical Encoding → Verkle Accumulator + Langfuse (auto)
+[HierarchicalVerkleMiddleware.start_span("user_interaction")] → Record event in span
     ↓
 MCP Initialize Handshake (JSON-RPC 2.0)
     ↓
-[IntegrityMiddleware.record_mcp_event()] → Canonical Encoding → Verkle Accumulator + Langfuse
+[HierarchicalVerkleMiddleware.start_span("mcp_initialize")] → Record events → Per-span Verkle root
     ↓
-Tool Invocation (with Authorization & Signature)
+Tool Invocation (with IBS Authorization & Signature)
     ↓
-[IntegrityMiddleware] → Canonical Encoding → Verkle Accumulator + Langfuse
+[HierarchicalVerkleMiddleware.start_span("tool_execution")] → Record tool call + response → Signature verified
     ↓
-LLM Model Output
+LLM Model Output / Final Response
     ↓
-[IntegrityMiddleware] → Canonical Encoding → Verkle Accumulator + Langfuse
+[HierarchicalVerkleMiddleware.start_span("final_response")] → Record response with span root
     ↓
-Finalization → (root_b64, canonical_log) → OTel Span → Auto-export to Langfuse
+Finalization → Session Root (combines all span roots) → Commitments file → Local storage
+    ↓
+OTel Export → Auto-export to Langfuse (if enabled)
 ```
 
-### Unified Middleware Pattern
+### Hierarchical Span-Based Middleware Pattern
 
-Before: `accumulator = VerkleAccumulator()` + `langfuse = LangfuseClient()` (separate objects)
-
-After: `middleware = IntegrityMiddleware(session_id)` (single object, automatic dual-tracking)
+Before: Flat event stream with single root  
+After: Hierarchical spans with per-span roots + session root
 
 ```python
-# Record events with automatic Langfuse integration
-middleware.record_prompt("What is Verkle?", metadata={...})
-middleware.record_tool_input("search", {"query": "..."})
-middleware.record_tool_output("search", result)
-middleware.record_model_output(response_text)
+# Initialize hierarchical middleware (auto-detects Langfuse)
+middleware = HierarchicalVerkleMiddleware(session_id="agent-run-001")
 
-# MCP protocol events (JSON-RPC 2.0)
-middleware.record_mcp_event("mcp_initialize_request", request_dict)
-middleware.record_mcp_event("mcp_tools_call_response", response_dict)
+# Span 1: MCP Initialize handshake
+middleware.start_span("mcp_initialize")
+middleware.record_event_in_span("mcp_initialize_request", request_dict, signer_id="client")
+middleware.record_event_in_span("mcp_initialize_response", response_dict, signer_id="server")
 
-# Finalize and get commitments
-root_b64, canonical_log = middleware.finalize()  # Returns tuple
+# Span 2: User interaction
+middleware.start_span("user_interaction")
+middleware.record_event_in_span("user_prompt", {"prompt": "..."}, signer_id="user")
+
+# Span 3: Tool execution (with IBS signatures)
+middleware.start_span("tool_execution")
+middleware.record_event_in_span("tool_input", {"tool": "search", "args": {...}}, signer_id="client")
+middleware.record_event_in_span("tool_output", {"result": {...}, "signature": sig}, signer_id="tool")
+
+# Span 4: Final response
+middleware.start_span("final_response")
+middleware.record_event_in_span("final_response", {"answer": "..."}, signer_id="llm")
+
+# Finalize with hierarchical roots
+session_root, commitments, canonical_log_bytes = middleware.finalize()
+# Returns: session_root (combines all span roots), per-span roots, commitments object
+
+# Save to local storage (creates 6 files: canonical_log.jsonl, spans_structure.json, 
+# commitments.json, metadata.json, otel_export.json, RECOVERY.md)
+middleware.save_to_local_storage(Path("workflow_abc123"))
 ```
 
 ### Deterministic Event Format
@@ -536,20 +552,23 @@ MCP protocol events include the full JSON-RPC 2.0 message:
 
 ---
 
-## 🌳 Cryptographic Commitments: Verkle Trees with KZG
+## 🌳 Cryptographic Commitments: Hierarchical Verkle Trees with KZG
 
-### Current Implementation: KZG Polynomial Commitments with Unified Middleware
+### Current Implementation: Hierarchical KZG Polynomial Commitments with Per-Span + Session Roots
 
-**What we have:** **Integrated KZG-based Verkle Commitments** over BLS12-381 elliptic curve
-- **Unified IntegrityMiddleware** (in `src/integrity/__init__.py`)
-  - Owns VerkleAccumulator and optional LangfuseClient
-  - Single initialization: `middleware = IntegrityMiddleware(session_id)`
-  - Methods: `record_prompt()`, `record_model_output()`, `record_tool_input/output()`, `record_mcp_event()`
-  - Returns: `Tuple[str, bytes]` from `finalize()` (root_b64, canonical_log_bytes)
-- **Event Accumulation** → **SHA-256 Hashing** → **KZG Commitments** → **Single Root
+**What we have:** **Hierarchical Verkle Commitments** over BLS12-381 elliptic curve
+- **HierarchicalVerkleMiddleware** (in `src/integrity/hierarchical_integrity.py`)
+  - Organizes events into OpenTelemetry-compatible spans
+  - Each span gets its own Verkle root (per-span commitment)
+  - Session root combines all span roots into single commitment
+  - Methods: `start_span()`, `record_event_in_span()`, `finalize()`, `save_to_local_storage()`
+  - Returns: `Tuple[str, HierarchicalCommitments, bytes]` from `finalize()` (session_root, commitments object, canonical_log_bytes)
+  - Auto-detects and integrates Langfuse if available
+- **Per-Span Event Accumulation** → **SHA-256 Hashing** → **Span-Level KZG Commitments** → **Session Root (Verkle of span roots)**
 - Algorithm: KZG polynomial commitments with BLS12-381 pairing-friendly curves
-- Status: ✅ **Fully functional and tested** (128+ tests passing, 23 KZG tests)
+- Status: ✅ **Fully functional and tested** (128+ tests passing, hierarchical spans verified with 6-file local storage)
 - Integration: Automatic Langfuse export with graceful fallback if unavailable
+- Local Storage: Saves 6 files per run (canonical_log.jsonl, spans_structure.json, commitments.json, metadata.json, otel_export.json, RECOVERY.md)
 
 ### Key Properties
 
@@ -559,13 +578,23 @@ MCP protocol events include the full JSON-RPC 2.0 message:
 - **Proof Efficiency**: O(1) compact proofs (vs O(log n) for Merkle trees)
 - **Stateless Verification**: Proofs don't require full state tree
 
-### How It Works
+### How Hierarchical Verkle Works
 
-1. **Events are canonically encoded** using RFC 8785 (deterministic JSON)
-2. **SHA-256 hashes** created for each event
-3. **Polynomial commitment** built from event hashes using KZG scheme
-4. **Single KZG commitment** serves as tamper-proof seal
-5. **Anyone can verify** the commitment matches the log without trusting the server
+1. **Events organized into spans** (mcp_initialize, user_interaction, tool_execution, final_response)
+2. **Per-span processing**:
+   - Events canonically encoded using RFC 8785 (deterministic JSON)
+   - SHA-256 hashes created for each event within the span
+   - Span accumulator builds KZG commitment from all events in that span
+   - Per-span Verkle root computed and stored
+3. **Session-level processing**:
+   - All span roots collected into session accumulator
+   - Session root computed as KZG commitment of span roots
+   - Complete hierarchical commitment structure created
+4. **Verification support**:
+   - Span-level verification: Verify individual span integrity
+   - Session-level verification: Verify all spans combine correctly
+   - Full session root verification: Proves entire agent run integrity
+5. **Anyone can verify** the session root matches the complete log without trusting the server
 
 See `src/crypto/verkle.py` for implementation details and trusted setup parameters.
 
@@ -929,13 +958,16 @@ RFC 8785 canonical JSON encoder with deterministic serialization and support for
 ### `src/crypto/verkle.py`
 Verkle tree accumulator using KZG commitments over BLS12-381 elliptic curve. Produces tamper-proof root commitments.
 
-### `src/integrity/__init__.py` (Refactored)
-**Unified IntegrityMiddleware**: Manages both VerkleAccumulator and optional LangfuseClient
-- Single initialization with automatic Langfuse detection
-- Methods: `record_prompt()`, `record_model_output()`, `record_tool_input/output()`, `record_mcp_event()`
-- Automatic dual-tracking: Events logged to both accumulator and Langfuse simultaneously
-- Returns tuple from `finalize()`: `(root_b64, canonical_log_bytes)`
-- Zero boilerplate in demos (single middleware object instead of 3 separate ones)
+### `src/integrity/hierarchical_integrity.py` (Hierarchical Verkle)
+**HierarchicalVerkleMiddleware**: Extends IntegrityMiddleware with span-based event organization
+- OpenTelemetry-compatible span management (mcp_initialize, user_interaction, tool_execution, final_response)
+- Per-span Verkle roots with independent accumulators
+- Session-level root combining all span roots
+- Methods: `start_span()`, `record_event_in_span()`, `finalize()`, `save_to_local_storage()`, `export_to_otel_format()`
+- Automatic Langfuse integration with graceful fallback
+- Returns tuple from `finalize()`: `(session_root, HierarchicalCommitments, canonical_log_bytes)`
+- Local storage: Saves complete hierarchical structure to disk (6 files per run)
+- Tool signatures preserved: IBS signatures on tool outputs still recorded and verifiable
 
 ### `src/transport/jsonrpc_protocol.py` (New)
 JSON-RPC 2.0 protocol implementation with MCP 2024-11 compliance:

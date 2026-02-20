@@ -29,12 +29,102 @@ app = typer.Typer(
 )
 
 
+def categorize_events(events: list) -> tuple:
+    """
+    Separate application events from protocol events.
+    
+    Protocol events are those with type starting with 'mcp_', 'jsonrpc_', or 'commitment_'.
+    All others are application events.
+    
+    Returns:
+        tuple: (app_events, protocol_events)
+    """
+    app_events = []
+    protocol_events = []
+    
+    for event in events:
+        event_type = event.get("type") or event.get("event_type", "")
+        
+        # Check if it's a protocol event
+        if event_type.startswith(("mcp_", "jsonrpc_", "commitment_")):
+            protocol_events.append(event)
+        else:
+            app_events.append(event)
+    
+    return app_events, protocol_events
+
+
+def get_event_summary(event_type: str) -> str:
+    """
+    Return human-readable description of event type.
+    """
+    descriptions = {
+        # Application events
+        "user_prompt": "User Question",
+        "model_output": "LLM Response",
+        "tool_input": "Tool Called",
+        "tool_output": "Tool Result",
+        "prompt": "User Input",
+        
+        # Protocol events
+        "mcp_initialize_request": "MCP Handshake Started",
+        "mcp_initialize_response": "MCP Handshake Complete",
+        "mcp_tools_call_request": "Tool Invocation Request",
+        "mcp_tools_call_response": "Tool Invocation Response",
+    }
+    return descriptions.get(event_type, event_type)
+
+
+def print_event_breakdown(app_events: list, protocol_events: list) -> None:
+    """
+    Print a formatted breakdown of application and protocol events.
+    """
+    total = len(app_events) + len(protocol_events)
+    typer.echo(f"\n📊 Event Breakdown")
+    typer.echo(f"  Total Events: {total}")
+    
+    # Application events
+    if app_events:
+        typer.echo(f"  ├─ Application Events: {len(app_events)}")
+        app_event_types = {}
+        for event in app_events:
+            et = event.get("type") or event.get("event_type", "unknown")
+            app_event_types[et] = app_event_types.get(et, 0) + 1
+        
+        for i, (event_type, count) in enumerate(sorted(app_event_types.items())):
+            is_last_app = (i == len(app_event_types) - 1) and not protocol_events
+            prefix = "  └─" if is_last_app else "  │  ├─"
+            summary = get_event_summary(event_type)
+            if summary != event_type:
+                typer.echo(f"{prefix} {summary} ({event_type}): {count}")
+            else:
+                typer.echo(f"{prefix} {event_type}: {count}")
+    
+    # Protocol events
+    if protocol_events:
+        typer.echo(f"  └─ Protocol Events: {len(protocol_events)}")
+        protocol_event_types = {}
+        for event in protocol_events:
+            et = event.get("type") or event.get("event_type", "unknown")
+            protocol_event_types[et] = protocol_event_types.get(et, 0) + 1
+        
+        for i, (event_type, count) in enumerate(sorted(protocol_event_types.items())):
+            is_last = i == len(protocol_event_types) - 1
+            prefix = "     └─" if is_last else "     ├─"
+            summary = get_event_summary(event_type)
+            if summary != event_type:
+                typer.echo(f"{prefix} {summary} ({event_type}): {count}")
+            else:
+                typer.echo(f"{prefix} {event_type}: {count}")
+
+
 @app.command()
 def verify(
     canonical_log_path: str = typer.Argument(..., help="Path to the canonical log file"),
     expected_root_b64: str = typer.Argument(..., help="Expected Verkle root (Base64-encoded)"),
     expected_hash: Optional[str] = typer.Option(None, "--expected-hash", help="Expected SHA-256 hash of canonical log (optional)"),
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed verification steps")
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed verification steps"),
+    show_protocol: bool = typer.Option(False, "--show-protocol", help="Show protocol event breakdown")
 ) -> None:
     """
     Verify an agent run by reconstructing the Verkle tree.
@@ -116,6 +206,11 @@ def verify(
             typer.echo(f"  First event: {events[0].get('event_type', 'unknown')}")
             typer.echo(f"  Last event: {events[-1].get('event_type', 'unknown')}")
         
+        # Categorize events if requested
+        if show_protocol:
+            app_events, protocol_events = categorize_events(events)
+            print_event_breakdown(app_events, protocol_events)
+        
         # Reconstruct tree and verify root
         if verbose:
             typer.echo("\nVerifying Verkle tree root...")
@@ -142,7 +237,10 @@ def verify(
         
         # Compare roots
         if computed_root == expected_root:
-            typer.echo(f"\n✓ Verification PASSED ✓")
+            if show_protocol:
+                typer.echo(f"\n✓ Verification PASSED ✓ (MCP Compliant)")
+            else:
+                typer.echo(f"\n✓ Verification PASSED ✓")
             typer.echo(f"  Root matches: {base64.b64encode(computed_root).decode()[:20]}...")
             typer.echo(f"  Events verified: {len(events)}")
             raise typer.Exit(0)

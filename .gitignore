@@ -68,6 +68,7 @@ logs/
 # Output
 artifacts/
 outputs/
+workflows/
 *.jsonl
 proof.json
 

@@ -366,3 +366,19 @@ class IntegrityMiddleware:
     def get_canonical_log(self) -> bytes:
         """Get the entire canonical log (for storage)"""
         return self.accumulator.get_canonical_log()
+
+
+# Import hierarchical version for convenience
+from src.integrity.hierarchical_integrity import (
+    HierarchicalVerkleMiddleware,
+    HierarchicalCommitments,
+    SpanMetadata
+)
+
+__all__ = [
+    "IntegrityMiddleware",
+    "IntegrityEvent",
+    "HierarchicalVerkleMiddleware",
+    "HierarchicalCommitments",
+    "SpanMetadata",
+]

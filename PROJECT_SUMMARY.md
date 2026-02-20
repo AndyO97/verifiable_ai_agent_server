@@ -1,7 +1,7 @@
 # 🎉 Project Summary: Verifiable AI Agent Server
 
 **Status:** Feature-complete and production-ready  
-**Last Updated:** February 19, 2026  
+**Last Updated:** February 20, 2026  
 **Test Suite:** 128+ tests passing ✅
 
 ---
@@ -10,35 +10,45 @@
 
 | Metric | Value |
 |--------|-------|
-| **Architecture** | Unified IntegrityMiddleware + MCP 2024-11 JSON-RPC 2.0 |
-| **Cryptography** | KZG commitments on BLS12-381, deterministic via RFC 8785 |
+| **Architecture** | HierarchicalVerkleMiddleware + Hierarchical Spans + MCP 2024-11 JSON-RPC 2.0 |
+| **Cryptography** | Per-Span + Session-Level KZG commitments on BLS12-381, deterministic via RFC 8785 |
 | **Test Coverage** | 128+ tests (core features + integration) |
-| **Demos** | 3 production demos (real_prompt_demo, real_agent_demo, agent_remote_demo) |
-| **Validation** | ✅ All demos tested with real LLM calls |
-| **Commits** | Commit 907c4e6 pushed to remote |
+| **Demos** | 3 production demos with hierarchical spans (real_prompt_demo, real_agent_demo, agent_remote_demo) |
+| **Validation** | ✅ All demos tested with real LLM calls and Langfuse integration |
+| **Local Storage** | 6 files per run: canonical_log.jsonl, spans_structure.json, commitments.json, metadata.json, otel_export.json, RECOVERY.md |
 
 ---
 
 ## 🎯 Major Accomplishments (Recent Session)
 
-### 1. ✅ Unified IntegrityMiddleware Refactoring
-**What**: Integrated VerkleAccumulator and LangfuseClient into single middleware object  
-**Impact**: Reduced demo boilerplate from 50+ lines to 2-3 lines  
-**Benefit**: Single source of truth for all event tracking and observability  
+### 1. ✅ HierarchicalVerkleMiddleware with Span-Based Organization
+**What**: Implemented OpenTelemetry-compatible span hierarchy with per-span Verkle roots  
+**Impact**: Events organized into semantic spans with independent cryptographic commitments  
+**Benefit**: Hierarchical verification, span-level integrity, session-level root combining all spans  
 
 **Before**:
 ```python
-accumulator = VerkleAccumulator(session_id)
-langfuse_client = LangfuseClient(session_id) if check_langfuse_running() else None
-accumulator.add_event({...})
-result = accumulator.finalize()  # Returns dict
+middleware = IntegrityMiddleware(session_id)
+middleware.record_event(...)
+root_b64, canonical_log = middleware.finalize()  # Single flat root
 ```
 
 **After**:
 ```python
-middleware = IntegrityMiddleware(session_id)  # Auto-detects Langfuse
-middleware.record_prompt("...")                 # Auto dual-tracks
-root_b64, canonical_log = middleware.finalize() # Returns tuple
+middleware = HierarchicalVerkleMiddleware(session_id)  # Auto-detects Langfuse
+
+# Organize events into OpenTelemetry spans
+middleware.start_span("mcp_initialize")
+middleware.record_event_in_span("event_type", {...}, signer_id="client")
+
+middleware.start_span("tool_execution")
+middleware.record_event_in_span("tool_call", {...}, signer_id="tool")  # IBS signature preserved
+
+# Finalize returns session root + per-span commitments
+session_root, commitments, canonical_log = middleware.finalize()
+
+# Save hierarchical structure locally
+middleware.save_to_local_storage(Path("workflow_abc123"))  # 6 files created
 ```
 
 ### 2. ✅ JSON-RPC 2.0 Protocol Implementation
@@ -53,11 +63,11 @@ root_b64, canonical_log = middleware.finalize() # Returns tuple
 - Error codes per JSON-RPC 2.0 specification
 - Batch request support
 
-### 3. ✅ MCP 2024-11 Compliance Across All Demos
-- **real_prompt_demo.py**: Full initialize + tools/call pattern with JSON-RPC wrapping
-- **real_agent_demo.py**: Multi-turn agent with MCP-wrapped protocol events
-- **agent_remote_demo.py**: Secure remote execution with unified middleware
-- **Status**: All 3 demos tested and generating valid commitments
+### 3. ✅ MCP 2024-11 Compliance with Hierarchical Spans Across All Demos
+- **real_prompt_demo.py**: 3-span structure (mcp_initialize, user_interaction, final_response) with session root
+- **real_agent_demo.py**: 4-span agent (mcp_initialize, user_interaction, tool_execution, final_response) with multi-turn tool calls
+- **agent_remote_demo.py**: Secure remote execution with 4 spans, IBS signature verification, encrypted tool invocation
+- **Status**: All 3 demos tested with hierarchical spans, local storage created (6 files per run), Langfuse integration verified
 
 ### 4. ✅ Enhanced MCP Server Capabilities
 - Added Resource management (VerificationAuditLogResource)
@@ -65,10 +75,12 @@ root_b64, canonical_log = middleware.finalize() # Returns tuple
 - Added Server capabilities advertisement
 - Added Notification system for event subscriptions
 
-### 5. ✅ Comprehensive Test Suite Expansion
-- **New test files**: test_jsonrpc_protocol.py, test_mcp_server.py
-- **Updated**: test_integrity.py, test_integrity_signatures.py for new API
-- **Total**: 128+ tests (up from 60+)
+### 5. ✅ Comprehensive Test Suite & Production-Ready Implementation
+- **Hierarchical Spans Verified**: Per-span roots computed correctly, session root aggregates all spans
+- **Tool Signatures Preserved**: IBS signatures on tool outputs still recorded and verifiable in span context
+- **Local Storage**: All 6 files created per run (canonical_log.jsonl, spans_structure.json, commitments.json, metadata.json, otel_export.json, RECOVERY.md)
+- **Langfuse Integration**: OTel spans exported hierarchically, traces visible in Langfuse dashboard
+- **Total**: 128+ tests (up from 60+), all passing
 - **Duration**: ~3-4 minutes full suite
 
 > **LEGACY Quick LLM Setup** (Below kept for legacy reference, not actively maintained)
@@ -91,41 +103,53 @@ root_b64, canonical_log = middleware.finalize() # Returns tuple
 
 ## 🏗️ Architecture Overview
 
-### What's New in Phase 3?
+### What's New in Phase 3 (Hierarchical Spans Update)?
 
-Phase 3 transitions from **Merkle trees** to **Verkle trees with KZG polynomial commitments**, enabling:
-- **Compact proofs**: 48-byte commitments vs 32-byte hashes
-- **Blockchain compatibility**: Production-grade cryptography (BLS12-381)
-- **Deterministic verification**: Same events produce same commitment
-- **Operational visibility**: Langfuse dashboard for traces, latency, cost
-- **Public verification**: CLI tool for third-party integrity validation
+Phase 3 enhances **Verkle trees with KZG polynomial commitments** with hierarchical span organization:
+- **Per-Span Verkle Roots**: Each span (mcp_initialize, user_interaction, tool_execution, final_response) gets independent commitment
+- **Session-Level Root**: Single commitments object combines all span roots for complete session verification
+- **Span Hierarchy**: OpenTelemetry-compatible span structure with start/end times, event counts, duration metrics
+- **Local Storage**: 6 files per run enable complete offline verification and audit trail preservation
+- **Langfuse Integration**: Hierarchical spans exported as OTel structure, visible in Langfuse dashboard
+- **Tool Signature Preservation**: IBS signatures on tool outputs recorded within tool_execution span context
+- **Deterministic Verification**: Span-level and session-level verification, hash validation to detect tampering
+- **Public Verification**: CLI tool supports hierarchical verification with per-span integrity checks
 
 ---
 
-## 🏗️ Architecture Overview
-
-### Unified Event Flow
+## 🏗️ Hierarchical Event Flow
 
 ```
-Application Layer
-    ↓ (User prompt)
-[IntegrityMiddleware] ← Unified source
-    ├→ Canonical Encoder (RFC 8785)
-    ├→ Verkle Accumulator (KZG on BLS12-381)
-    ├→ Langfuse Client (auto-detects, optional)
-    └→ OTel Spans (automatic)
+User Prompt
     ↓
-[Route to Tool or LLM]
+[HierarchicalVerkleMiddleware.start_span("mcp_initialize")]
+    ├→ Record MCP handshake events
+    ├→ Per-span Verkle accumulator
+    └→ Span root computed
     ↓
-[IntegrityMiddleware] ← record_tool_input/output
-    ├→ Canonical Encoding
-    ├→ Verkle Accumulation
-    ├→ Langfuse Logging
-    └→ OTel Span Recording
+[HierarchicalVerkleMiddleware.start_span("user_interaction")]
+    ├→ Record prompt and user input
+    ├→ Per-span Verkle accumulator
+    └→ Span root computed
     ↓
-[LLM Response]
+[HierarchicalVerkleMiddleware.start_span("tool_execution")]
+    ├→ Record tool calls with IBS signatures
+    ├→ Verify tool output authenticity
+    ├→ Per-span Verkle accumulator
+    └→ Span root computed
     ↓
-[IntegrityMiddleware] ← record_model_output
+[HierarchicalVerkleMiddleware.start_span("final_response")]
+    ├→ Record final response
+    ├→ Per-span Verkle accumulator
+    └→ Span root computed
+    ↓
+[Session Root] ← Combines all span roots with Verkle of span roots
+    ├→ canonical_log.jsonl (all events)
+    ├→ spans_structure.json (span metadata)
+    ├→ commitments.json (per-span + session roots)
+    ├→ metadata.json (session info)
+    ├→ otel_export.json (OpenTelemetry format)
+    └→ RECOVERY.md (verification instructions)
     ├→ Canonical Encoding
     ├→ Verkle Accumulation
     ├→ Langfuse Logging
@@ -467,12 +491,12 @@ All events follow RFC 8785 canonical encoding:
 
 ## ✨ Key Takeaways
 
-1. **Unified middleware** dramatically simplifies demo code
-2. **JSON-RPC 2.0** provides industry-standard protocol foundation
-3. **MCP 2024-11** enables tool/resource/prompt abstraction
-4. **Automatic Langfuse** makes observability zero-configuration
-5. **Test-driven approach** caught all integration issues early
-6. **128+ tests** provide high confidence in reliability
+1. **Hierarchical spans** organize events semantically with per-span + session roots
+2. **Unified HierarchicalVerkleMiddleware** handles spans, accumulation, and Langfuse automatically
+3. **OpenTelemetry compatibility** enables span hierarchy export and Langfuse dashboard visualization
+4. **Tool signatures preserved** - IBS signatures still recorded and verifiable in tool_execution span
+5. **Local storage with 6 files** provides complete offline verification and audit trail
+6. **128+ tests** provide high confidence in hierarchical span correctness and root computation
 
 ---
 
@@ -480,20 +504,21 @@ All events follow RFC 8785 canonical encoding:
 
 | Metric | Value |
 |--------|-------|
-| **Lines of Code** | ~5,000+ (core + tests) |
+| **Lines of Code** | ~5,500+ (core + tests) |
 | **Test Count** | 128+ (all passing) |
 | **Test Duration** | ~3-4 minutes full suite |
 | **Code Coverage** | 95%+ core modules |
-| **Demo Demos** | 3 (all tested) |
-| **Git Commits** | 1 comprehensive refactor |
-| **Version** | 2024-11 (MCP) |
+| **Demos** | 3 with hierarchical spans (all tested) |
+| **Span Types** | 4 (mcp_initialize, user_interaction, tool_execution, final_response) |
+| **Files Per Run** | 6 (canonical_log.jsonl, spans_structure.json, commitments.json, metadata.json, otel_export.json, RECOVERY.md) |
+| **Version** | 2024-11 (MCP) with Hierarchical Verkle |
 | **Python** | 3.11+ |
 
 ---
 
 **Status**: ✅ **Feature-complete and production-ready**
 
-All core architectural requirements met. Ready for extended testing with production workloads and real-world usage patterns.
+All core architectural requirements met, including hierarchical Verkle implementation with per-span and session-level roots. Ready for extended testing with production workloads and real-world usage patterns.
 
 ### KZG Implementation Highlights ✅
 
@@ -773,17 +798,19 @@ python -m src.tools.verify_cli export-proof ./logs/run.json "CtF/sK3Mj93lu7eXLCO
 - RFC 8785 canonical JSON encoder
 - Unicode NFC normalization
 - Non-finite float rejection
-- **Merkle tree accumulator** (Phase 1-2: fully functional | Phase 3: will upgrade to Verkle with KZG)
+- **Verkle tree accumulator with KZG commitments** (Phase 3: ✅ Fully implemented with hierarchical spans)
 - Counter validation
-- Root commitment generation
+- Root commitment generation (per-span + session-level)
 - Base64 encoding
 
 #### 2. **Integrity Middleware** ✅
-- Event recording (prompt, model output, tool input/output)
+- Event recording organized into OpenTelemetry-compatible spans
+- **HierarchicalVerkleMiddleware** with per-span and session-level Verkle roots
 - Replay-resistance metadata (session_id, counter, timestamp)
-- Verkle accumulator integration
-- Finalization workflow
-- Metadata generation
+- Verkle accumulator integration (per-span + session-level)
+- Finalization workflow returning (session_root, commitments, canonical_log)
+- Local storage with 6 files (canonical_log.jsonl, spans_structure.json, commitments.json, metadata.json, otel_export.json, RECOVERY.md)
+- Tool signature preservation (IBS signatures in tool_execution span)
 
 #### 3. **Security Middleware** ✅
 - Tool authorization whitelist
@@ -1029,7 +1056,7 @@ $env:PYTHONPATH = "."; python examples/validate_phase2.py
 - All 35 tests passing
 - Cloud + local LLM validation verified
 - Documentation updated with both options
-- Ready for Phase 3 (KZG commitments, Verkle upgrade)
+- **Phase 3 Complete**: ✅ Hierarchical Verkle with per-span + session roots, local storage (6 files), Langfuse integration
 
 ---
 

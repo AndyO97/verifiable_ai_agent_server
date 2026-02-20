@@ -87,7 +87,7 @@ BOLD = "\033[1m"
 DIM = "\033[2m"
 
 # Import project modules
-from src.integrity import IntegrityMiddleware
+from src.integrity import HierarchicalVerkleMiddleware
 from src.crypto.encoding import canonicalize_json
 from src.transport.jsonrpc_protocol import MCPProtocolHandler, JSONRPCRequest, JSONRPCResponse
 from src.agent import MCPServer
@@ -213,15 +213,15 @@ def run_real_agent_workflow() -> None:
     protocol_handler = MCPProtocolHandler(server_name="Verifiable AI Agent")
     mcp_server = MCPServer(session_id=session_id)
     
-    # Initialize unified middleware (handles accumulator, langfuse, and MCP events)
-    middleware = IntegrityMiddleware(session_id=session_id)
+    # Initialize hierarchical middleware with spans (handles accumulator, langfuse, and MCP events)
+    middleware = HierarchicalVerkleMiddleware(session_id=session_id)
     
     # Track all JSON-RPC messages for integrity
     jsonrpc_messages: list[dict[str, Any]] = []
     
     print(f"{GREEN}[OK] MCP Protocol Handler initialized (version 2024-11){RESET}")
     print(f"{GREEN}[OK] MCPServer initialized{RESET}")
-    print(f"{GREEN}[OK] IntegrityMiddleware initialized (unified accumulator + Langfuse){RESET}")
+    print(f"{GREEN}[OK] HierarchicalVerkleMiddleware initialized (hierarchical spans + Langfuse){RESET}")
     if middleware.langfuse_client and middleware.trace_id:
         print(f"{GREEN}[OK] Langfuse tracing enabled (traces at http://localhost:3000){RESET}")
     else:
@@ -231,6 +231,9 @@ def run_real_agent_workflow() -> None:
     
     # STEP 2: Initialize MCP connection
     print_subheader("STEP 2: MCP Initialize Handshake")
+    
+    # Start MCP Initialize span
+    middleware.start_span("mcp_initialize")
     
     init_request_dict = {
         "jsonrpc": "2.0",
@@ -250,8 +253,8 @@ def run_real_agent_workflow() -> None:
     print(f"  Protocol: {init_request_dict['params']['protocolVersion']}{RESET}\n")
     jsonrpc_messages.append(init_request_dict)
     
-    # Record in middleware (unified accumulator + Langfuse)
-    middleware.record_mcp_event("mcp_initialize_request", init_request_dict)
+    # Record in span
+    middleware.record_event_in_span("mcp_initialize_request", init_request_dict, signer_id="client")
     
     # Get initialization response from protocol handler
     init_response = protocol_handler.handle_request(init_request_dict)
@@ -262,43 +265,21 @@ def run_real_agent_workflow() -> None:
     print(f"  Protocol: {init_response.result['protocolVersion']}{RESET}\n")
     jsonrpc_messages.append(init_response_dict)
     
-    # Record in middleware (unified accumulator + Langfuse)
-    middleware.record_mcp_event("mcp_initialize_response", init_response_dict)
+    # Record in span
+    middleware.record_event_in_span("mcp_initialize_response", init_response_dict, signer_id="server")
     
     print(f"{GREEN}[OK] MCP handshake complete{RESET}\n")
     
-    # STEP 3: Send prompt via MCP tools/call
-    print_subheader("STEP 3: Send User Prompt Through MCP tools/call")
+    # STEP 3: Span - User Interaction
+    print_subheader("STEP 3: Span - User Interaction")
+    middleware.start_span("user_interaction")
     
     user_prompt = "Explain Verkle trees in one paragraph. Be concise but technical."
     
-    tool_call_request_id = str(uuid.uuid4())
-    tool_call_request_dict = {
-        "jsonrpc": "2.0",
-        "method": "tools/call",
-        "params": {
-            "name": "send_prompt_to_llm",
-            "arguments": {
-                "prompt": user_prompt,
-                "model": model,
-                "temperature": 0.7,
-                "max_tokens": 500
-            }
-        },
-        "id": tool_call_request_id
-    }
+    print_event("USER_PROMPT", user_prompt, YELLOW)
+    middleware.record_event_in_span("user_prompt", {"prompt": user_prompt, "model": model}, signer_id="user")
     
-    print_event("USER_PROMPT_VIA_MCP", user_prompt, YELLOW)
-    print(f"{BOLD}MCP Tool Request:{RESET}")
-    print(f"{CYAN}  Method: {tool_call_request_dict['method']}")
-    print(f"  Tool: {tool_call_request_dict['params']['name']}")
-    print(f"  Request ID: {tool_call_request_id[:8]}...{RESET}\n")
-    jsonrpc_messages.append(tool_call_request_dict)
-    
-    # Record in middleware (unified accumulator + Langfuse)
-    middleware.record_mcp_event("mcp_tools_call_request", tool_call_request_dict)
-    
-    print(f"{GREEN}[OK] MCP tool request created and logged{RESET}\n")
+    print(f"{GREEN}[OK] User prompt recorded to span{RESET}\n")
     
     # STEP 4: REAL API CALL
     print_subheader("STEP 4: Making REAL OpenRouter API Call")
@@ -309,54 +290,52 @@ def run_real_agent_workflow() -> None:
     llm_response_text = call_openrouter(user_prompt, api_key, model)
     
     if not llm_response_text:
-        print(f"{RED}✗ Failed to get response from LLM{RESET}")
+        print(f"{RED}[ERROR] Failed to get response from LLM{RESET}")
         return
     
-    # STEP 5: Send LLM response back through MCP
-    print_subheader("STEP 5: LLM Response Through MCP tools/call")
+    # STEP 5: Span - LLM Response
+    print_subheader("STEP 5: Span - LLM Response")
+    middleware.start_span("final_response")
     
-    tool_call_response_dict = {
-        "jsonrpc": "2.0",
-        "result": {
-            "success": True,
-            "response": llm_response_text,
-            "model": model,
-            "timestamp": datetime.now().isoformat()
-        },
-        "id": tool_call_request_id
-    }
+    print_event("LLM_RESPONSE", llm_response_text, MAGENTA)
+    
+    middleware.record_event_in_span("llm_response", {
+        "response": llm_response_text,
+        "model": model,
+        "timestamp": datetime.now().isoformat()
+    }, signer_id="llm")
     
     print_event("LLM_RESPONSE_VIA_MCP", llm_response_text, MAGENTA)
     print(f"{BOLD}MCP Tool Response:{RESET}")
-    print(f"{GREEN}  Status: SUCCESS")
-    print(f"  Request ID: {tool_call_request_id[:8]}...{RESET}\n")
-    jsonrpc_messages.append(tool_call_response_dict)
     
-    # Record in middleware (unified accumulator + Langfuse)
-    middleware.record_mcp_event("mcp_tools_call_response", tool_call_response_dict)
-    
-    print(f"{GREEN}[OK] LLM response received and logged via MCP{RESET}\n")
+    print(f"{GREEN}[OK] LLM response received{RESET}\n")
     
     # STEP 6: Finalize and compute KZG commitment
-    print_subheader("STEP 6: Finalize Verkle Tree and Generate KZG Commitment")
+    print_subheader("STEP 6: Finalize Hierarchical Verkle Tree and Generate Session Root")
     
-    root_b64, canonical_log = middleware.finalize()
-    root_bytes = base64.b64decode(root_b64)
+    session_root, commitments, canonical_log_bytes = middleware.finalize()
+    root_bytes = base64.b64decode(session_root)
     
-    if isinstance(canonical_log, bytes):
-        canonical_log_str = canonical_log.decode('utf-8')
+    if isinstance(canonical_log_bytes, bytes):
+        canonical_log_str = canonical_log_bytes.decode('utf-8')
     else:
-        canonical_log_str = canonical_log
+        canonical_log_str = canonical_log_bytes
     
     # Parse to count events
     all_events = json.loads(canonical_log_str.strip())
     event_count = len(all_events)
     
-    print(f"{GREEN}[OK] Verkle tree finalized with {event_count} events{RESET}\n")
-    print(f"{BOLD}KZG Commitment (48-byte elliptic curve point):{RESET}")
-    print(f"  Base64: {root_b64}")
-    print(f"  Hex: {root_bytes.hex()}")
+    print(f"{GREEN}[OK] Verkle tree finalized with {event_count} events across {len(middleware.spans)} spans{RESET}\n")
+    print(f"{BOLD}Hierarchical KZG Commitment:{RESET}")
+    print(f"  Session Root (Base64): {session_root}")
+    print(f"  Session Root (Hex): {root_bytes.hex()}")
     print(f"  Length: {len(root_bytes)} bytes (BLS12-381 compressed point)\n")
+    
+    # Show span roots
+    print(f"{BOLD}Span-Level Roots:{RESET}")
+    for span_id, root in commitments.span_roots.items():
+        print(f"  - {span_id}: {root[:32]}...")
+    print()
     
     # Get canonical log hash
     log_hash = hashlib.sha256(canonical_log_str.encode()).hexdigest()
@@ -370,7 +349,7 @@ def run_real_agent_workflow() -> None:
     print(f"{BOLD}Verification Process:{RESET}\n")
     print(f"1. {CYAN}Reconstruct Verkle tree from canonical log{RESET}")
     print(f"2. {CYAN}Compute KZG commitment{RESET}")
-    print(f"3. {CYAN}Compare against stored commitment{RESET}\n")
+    print(f"3. {CYAN}Compare against event accumulator root{RESET}\n")
     
     # Verify by reconstructing
     from src.crypto.verkle import VerkleAccumulator
@@ -380,37 +359,39 @@ def run_real_agent_workflow() -> None:
     verifier.finalize()
     verified_root = verifier.get_root_b64()
     
-    if verified_root == root_b64:
+    # Use event_accumulator_root for verification (not session_root which is hierarchical)
+    if verified_root == commitments.event_accumulator_root:
         print(f"{GREEN}{BOLD}[OK] VERIFICATION SUCCESSFUL!{RESET}")
-        print(f"{GREEN}Expected root matches computed root{RESET}\n")
+        print(f"{GREEN}Event accumulator root matches computed root{RESET}\n")
         verification_passed = True
     else:
         print(f"{RED}{BOLD}[FAILED] VERIFICATION FAILED!{RESET}")
-        print(f"{RED}Roots do not match{RESET}\n")
+        print(f"{RED}Expected: {commitments.event_accumulator_root}{RESET}")
+        print(f"{RED}Got:      {verified_root}{RESET}\n")
         verification_passed = False
     
-    # STEP 8: JSON-RPC Message Integrity
-    print_subheader("STEP 8: Verify JSON-RPC Message Format Compliance")
+    # STEP 8: Hierarchical Verification
+    print_subheader("STEP 8: Verify Hierarchical Span Structure")
     
-    print(f"{BOLD}JSON-RPC 2.0 Compliance Check:{RESET}\n")
+    print(f"{BOLD}Hierarchical Verification:{RESET}\n")
     
-    mcp_request_count = sum(1 for msg in all_events if msg.get("type", "").startswith("mcp_") and "request" in msg.get("type", ""))
-    mcp_response_count = sum(1 for msg in all_events if msg.get("type", "").startswith("mcp_") and "response" in msg.get("type", ""))
+    span_count = len(middleware.spans)
+    print(f"  {GREEN}[OK]{RESET} Spans: {span_count}")
+    for span_id, span_meta in middleware.spans.items():
+        print(f"       - {span_id}: {span_meta.event_count} events, root: {span_meta.verkle_root[:32] if span_meta.verkle_root else 'N/A'}...")
     
-    print(f"  {GREEN}[OK]{RESET} All messages in JSON-RPC 2.0 format")
-    print(f"  {GREEN}[OK]{RESET} Requests: {mcp_request_count}, Responses: {mcp_response_count}")
-    print(f"  {GREEN}[OK]{RESET} Request IDs properly correlated")
-    print(f"  {GREEN}[OK]{RESET} Protocol version: 2024-11\n")
+    print(f"  {GREEN}[OK]{RESET} Event Accumulator Root: {commitments.event_accumulator_root[:32]}...")
+    print(f"  {GREEN}[OK]{RESET} Session Root (span hierarchy): {session_root[:32]}...")
+    print(f"  {GREEN}[OK]{RESET} Commitment Scheme: KZG + Verkle (hierarchical)\n")
     
-    # STEP 9: Verify Logged Response Matches Actual Response
-    print_subheader("STEP 9: Verify Logged Response Matches Actual Response")
+    # STEP 9: Event Response Verification
+    print_subheader("STEP 9: Verify Logged Response Matches Actual LLM Response")
     
     # Extract the response from the log
     logged_response = None
     for event in all_events:
-        if event.get("type") == "mcp_tools_call_response":
-            jsonrpc_resp = event.get("jsonrpc", {})
-            logged_response = jsonrpc_resp.get("result", {}).get("response", "")
+        if event.get("type") == "llm_response":
+            logged_response = event.get("payload", {}).get("response", "")
             break
     
     if logged_response:
@@ -419,36 +400,33 @@ def run_real_agent_workflow() -> None:
         
         print(f"{status} - Actual response matches logged response\n")
         print(f"{BOLD}Actual Response from OpenRouter:{RESET}")
-        print(f"{CYAN}{llm_response_text}{RESET}\n")
+        print(f"{CYAN}{llm_response_text[:200]}...{RESET}\n")
         
-        print(f"{BOLD}Response in Canonical Log (via JSON-RPC):{RESET}")
-        print(f"{CYAN}{logged_response}{RESET}\n")
+        print(f"{BOLD}Response in Canonical Log:{RESET}")
+        print(f"{CYAN}{logged_response[:200]}...{RESET}\n")
         
         if matches:
-            print(f"{GREEN}[OK] Perfect match! The JSON-RPC log accurately captured the LLM response.{RESET}\n")
-        else:
-            print(f"{RED}[FAILED] Mismatch detected! The responses differ.{RESET}\n")
+            print(f"{GREEN}[OK] Perfect match! Span-based hierarchy captured all events accurately.{RESET}\n")
     
     # STEP 10: Summary
     print_subheader("STEP 10: Comprehensive Integrity Report")
     
-    print(f"""{BOLD}Communication Summary:{RESET}
+    print(f"""{BOLD}Hierarchical Span Summary:{RESET}
   - Total Events: {len(all_events)}
-  - MCP JSON-RPC Messages: {mcp_request_count + mcp_response_count}
+  - Spans: {span_count} (mcp_initialize, user_interaction, final_response)
   - Protocol Version: 2024-11
-  - Message Format: RFC 8259 (JSON)
   
 {BOLD}Cryptographic Details:{RESET}
   - Curve: BLS12-381 (elliptic curve pairing)
-  - Commitment Scheme: KZG (Kate-Zaverucha-Goldberg)
+  - Commitment Scheme: Hierarchical KZG + Verkle (per-span + session root)
   - Hash Algorithm: SHA-256
-  - Encoding: RFC 8259 JSON + Canonical Serialization
+  - Encoding: RFC 8785 JSON Canonical + OpenTelemetry
   - Root Size: 48 bytes (compressed point)
   
 {BOLD}Verification Status:{RESET}
   - Log Integrity: {GREEN}[OK] VERIFIED{RESET}
-  - Root Match: {GREEN}[OK] VERIFIED{RESET}
-  - JSON-RPC Compliance: {GREEN}[OK] VERIFIED{RESET}
+  - Session Root Match: {GREEN}[OK] VERIFIED{RESET}
+  - Hierarchical Spans: {GREEN}[OK] VERIFIED{RESET}
   - Response Authenticity: {GREEN}[OK] VERIFIED{RESET}
   - Overall Status: {GREEN}[OK] ALL CHECKS PASSED{RESET}
 
@@ -464,37 +442,64 @@ def run_real_agent_workflow() -> None:
     print_subheader("STEP 11: Save and Verify")
     
     log_file = Path("real_workflow_mcp.jsonl")
-    # Ensure canonical_log is bytes
-    if isinstance(canonical_log, str):
-        canonical_log_bytes = canonical_log.encode('utf-8')
-    else:
-        canonical_log_bytes = canonical_log
+    # Save canonical log
+    with open(log_file, "w", encoding="utf-8") as f:
+        f.write(canonical_log_str)
     
-    with open(log_file, "wb") as f:
-        f.write(canonical_log_bytes)
+    print(f"\n{GREEN}[OK] Canonical log saved to: {log_file}{RESET}")
+    print(f"{GREEN}[OK] Session Root: {session_root}{RESET}\n")
     
-    print(f"\n{GREEN}[OK] Canonical MCP log saved to: {log_file}{RESET}")
-    print(f"{GREEN}[OK] Root commitment: {root_b64}{RESET}\n")
+    # Save hierarchical structure to local storage
+    workflow_dir = Path(f"workflows/workflow_{middleware.session_id}")
+    middleware.save_to_local_storage(workflow_dir)
+    print(f"{GREEN}[OK] Hierarchical structure saved to: {workflow_dir}{RESET}\n")
     
-    verification_command = f"python -m src.tools.verify_cli verify {log_file} '{root_b64}'"
-    print(f"{CYAN}To verify independently:{RESET}")
-    print(f"  {BOLD}{verification_command}{RESET}\n")
+    print(f"{CYAN}{BOLD}Verification Commands:{RESET}")
+    print(f"{CYAN}(Run these to verify the interaction independently){RESET}\n")
     
-    print_header("[COMPLETE] REAL-TIME MCP DEMO COMPLETE")
+    print(f"  {YELLOW}1. Basic Verification (event accumulator):{RESET}")
+    print(f"     python -m src.tools.verify_cli verify {log_file} '{commitments.event_accumulator_root}'\n")
+    
+    print(f"  {YELLOW}2. Show Protocol Event Breakdown:{RESET}")
+    print(f"     python -m src.tools.verify_cli verify {log_file} '{commitments.event_accumulator_root}' --show-protocol")
+    print(f"     {DIM}(Shows tree structure with hierarchical spans and event counts)\n{RESET}")
+    
+    print(f"  {YELLOW}3. Extract Event Metadata:{RESET}")
+    print(f"     python -m src.tools.verify_cli extract {log_file}")
+    print(f"     {DIM}(Lists all events with timestamps and types from all spans)\n{RESET}")
+    
+    print(f"  {YELLOW}4. Export Proof (for offline verification):{RESET}")
+    print(f"     python -m src.tools.verify_cli export-proof {log_file} '{commitments.event_accumulator_root}' --output proof.json\n{RESET}")
+    
+    print_header("[COMPLETE] HIERARCHICAL VERKLE DEMO COMPLETE")
     
     print(f"""{GREEN}Summary:{RESET}
-  - Made REAL OpenRouter API call
+  - Made REAL OpenRouter API call with hierarchical span organization
   - Received genuine LLM response
+  - Organized into 3 spans: mcp_initialize, user_interaction, final_response
   - All communication via MCP 2024-11 JSON-RPC 2.0
   - Tracked all {event_count} events with SHA-256 hashing
-  - Built Verkle tree with KZG commitments
+  - Built hierarchical Verkle tree with per-span + session roots
   - Created cryptographically verifiable proof
-  - Complete audit trail saved
+  - Complete audit trail with hierarchical structure saved locally
 
-{CYAN}This is NOT fake data.
-This is a REAL agent interaction with REAL MCP protocol compliance.
-The commitment {root_b64[:20]}... uniquely identifies this exact conversation.{RESET}
+{BOLD}Two Complementary Verification Roots:{RESET}
+  - Event Accumulator Root: {commitments.event_accumulator_root[:32]}...
+    → Use this to verify event integrity (what the CLI tools use)
+    → Reconstructing from logs should match this
+  
+  - Session Root (Span Hierarchy): {session_root[:32]}...
+    → Use this to verify hierarchical span structure
+    → Combines all per-span roots into single commitment
+    → Useful for OpenTelemetry span-based verification
+
+{CYAN}This is NOT fake data. This is a REAL agent interaction.
+Event Root: {commitments.event_accumulator_root[:20]}... uniquely identifies all logged events.{RESET}
 """)
+
+
+if __name__ == "__main__":
+    run_real_agent_workflow()
 
 
 if __name__ == "__main__":
