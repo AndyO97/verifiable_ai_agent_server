@@ -146,13 +146,13 @@ def verify(
         # Load canonical log
         log_path = Path(canonical_log_path)
         if not log_path.exists():
-            typer.echo(f"✗ Error: Log file not found: {canonical_log_path}", err=True)
+            typer.echo(f"[ERROR] Log file not found: {canonical_log_path}", err=True)
             raise typer.Exit(1)
         
         with open(log_path, "r", encoding="utf-8") as f:
             canonical_log = f.read()
         
-        typer.echo(f"✓ Loaded canonical log ({len(canonical_log):,} bytes)")
+        typer.echo(f"[OK] Loaded canonical log ({len(canonical_log):,} bytes)")
         
         # Verify hash if provided
         if expected_hash:
@@ -161,12 +161,12 @@ def verify(
             
             actual_hash = hashlib.sha256(canonical_log.encode("utf-8")).hexdigest()
             if actual_hash != expected_hash:
-                typer.echo(f"✗ Hash mismatch!", err=True)
+                typer.echo(f"[ERROR] Hash mismatch!", err=True)
                 typer.echo(f"  Expected: {expected_hash}", err=True)
                 typer.echo(f"  Actual:   {actual_hash}", err=True)
                 raise typer.Exit(1)
             
-            typer.echo(f"✓ Canonical log hash verified")
+            typer.echo(f"[OK] Canonical log hash verified")
             if verbose:
                 typer.echo(f"  Hash: {actual_hash[:16]}...")
         
@@ -174,7 +174,7 @@ def verify(
         try:
             expected_root = base64.b64decode(expected_root_b64)
         except Exception as e:
-            typer.echo(f"✗ Error: Invalid Base64 root: {e}", err=True)
+            typer.echo(f"[ERROR] Error: Invalid Base64 root: {e}", err=True)
             raise typer.Exit(1)
         
         if verbose:
@@ -187,17 +187,17 @@ def verify(
         try:
             log_data = json.loads(canonical_log)
         except json.JSONDecodeError as e:
-            typer.echo(f"✗ Error: Invalid JSON in log file: {e}", err=True)
+            typer.echo(f"[ERROR] Error: Invalid JSON in log file: {e}", err=True)
             raise typer.Exit(1)
         
         # Handle both single event and array of events
         events = log_data if isinstance(log_data, list) else [log_data]
         
         if not events:
-            typer.echo(f"✗ Error: No events found in log", err=True)
+            typer.echo(f"[ERROR] Error: No events found in log", err=True)
             raise typer.Exit(1)
         
-        typer.echo(f"✓ Parsed {len(events)} events from log")
+        typer.echo(f"[OK] Parsed {len(events)} events from log")
         
         # Extract session_id from first event
         session_id = events[0].get("session_id", "unknown")
@@ -225,27 +225,27 @@ def verify(
                 if verbose and (i + 1) % max(1, len(events) // 10) == 0:
                     typer.echo(f"  Processed {i + 1}/{len(events)} events...")
             except Exception as e:
-                typer.echo(f"✗ Error processing event {i}: {e}", err=True)
+                typer.echo(f"[ERROR] Error processing event {i}: {e}", err=True)
                 raise typer.Exit(1)
         
         # Finalize and get computed root
         try:
             computed_root = accumulator.finalize()
         except Exception as e:
-            typer.echo(f"✗ Error finalizing Verkle tree: {e}", err=True)
+            typer.echo(f"[ERROR] Error finalizing Verkle tree: {e}", err=True)
             raise typer.Exit(1)
         
         # Compare roots
         if computed_root == expected_root:
             if show_protocol:
-                typer.echo(f"\n✓ Verification PASSED ✓ (MCP Compliant)")
+                typer.echo(f"\n[OK] Verification PASSED [OK] (MCP Compliant)")
             else:
-                typer.echo(f"\n✓ Verification PASSED ✓")
+                typer.echo(f"\n[OK] Verification PASSED [OK]")
             typer.echo(f"  Root matches: {base64.b64encode(computed_root).decode()[:20]}...")
             typer.echo(f"  Events verified: {len(events)}")
             raise typer.Exit(0)
         else:
-            typer.echo(f"\n✗ Verification FAILED ✗", err=True)
+            typer.echo(f"\n[ERROR] Verification FAILED [ERROR]", err=True)
             typer.echo(f"  Expected root: {expected_root_b64[:30]}...", err=True)
             typer.echo(f"  Computed root: {base64.b64encode(computed_root).decode()[:30]}...", err=True)
             raise typer.Exit(1)
@@ -254,7 +254,7 @@ def verify(
         raise
     except Exception as e:
         logger.exception("verification_failed", error=str(e))
-        typer.echo(f"✗ Error during verification: {e}", err=True)
+        typer.echo(f"[ERROR] Error during verification: {e}", err=True)
         raise typer.Exit(1)
 
 
@@ -279,7 +279,7 @@ def extract(
     try:
         log_path = Path(canonical_log_path)
         if not log_path.exists():
-            typer.echo(f"✗ Error: Log file not found: {canonical_log_path}", err=True)
+            typer.echo(f"[ERROR] Error: Log file not found: {canonical_log_path}", err=True)
             raise typer.Exit(1)
         
         with open(log_path, "rb") as f:
@@ -289,7 +289,7 @@ def extract(
         try:
             log_data = json.loads(canonical_log.decode("utf-8"))
         except json.JSONDecodeError as e:
-            typer.echo(f"✗ Error: Invalid JSON in log file: {e}", err=True)
+            typer.echo(f"[ERROR] Error: Invalid JSON in log file: {e}", err=True)
             raise typer.Exit(1)
         
         # Handle both single event and array of events
@@ -338,7 +338,7 @@ def extract(
         
     except Exception as e:
         logger.exception("extract_metadata_failed", error=str(e))
-        typer.echo(f"✗ Error: {e}", err=True)
+        typer.echo(f"[ERROR] Error: {e}", err=True)
         raise typer.Exit(1)
 
 
@@ -367,7 +367,7 @@ def export_proof(
     try:
         log_path = Path(canonical_log_path)
         if not log_path.exists():
-            typer.echo(f"✗ Error: Log file not found: {canonical_log_path}", err=True)
+            typer.echo(f"[ERROR] Error: Log file not found: {canonical_log_path}", err=True)
             raise typer.Exit(1)
         
         with open(log_path, "rb") as f:
@@ -377,7 +377,7 @@ def export_proof(
         try:
             log_data = json.loads(canonical_log.decode("utf-8"))
         except json.JSONDecodeError as e:
-            typer.echo(f"✗ Error: Invalid JSON in log file: {e}", err=True)
+            typer.echo(f"[ERROR] Error: Invalid JSON in log file: {e}", err=True)
             raise typer.Exit(1)
         
         events = log_data if isinstance(log_data, list) else [log_data]
@@ -438,7 +438,7 @@ def export_proof(
             json.dump(proof, f, indent=2)
         
         # Output verification status
-        verification_status = "✓ Proof exported" if proof["verification"]["verification_passed"] else "✗ Proof exported (FAILED verification)"
+        verification_status = "[OK] Proof exported" if proof["verification"]["verification_passed"] else "[FAILED] Proof exported (verification failed)"
         typer.echo(f"{verification_status} to {output_path}")
         typer.echo(f"  Root commitment: {computed_root_b64[:20]}...")
         typer.echo(f"  Events: {len(events)}")
@@ -449,7 +449,291 @@ def export_proof(
         
     except Exception as e:
         logger.exception("export_proof_failed", error=str(e))
-        typer.echo(f"✗ Error: {e}", err=True)
+        typer.echo(f"[ERROR] Error: {e}", err=True)
+        raise typer.Exit(1)
+
+
+@app.command()
+def list_workflows(
+    workflows_dir: str = typer.Option("workflows", "--dir", "-d", help="Path to workflows directory")
+) -> None:
+    """
+    List all available workflows with their metadata.
+    
+    Shows:
+    - Session ID
+    - Timestamp
+    - Session Root
+    - Event count
+    - Status
+    
+    Example:
+        list-workflows
+        list-workflows --dir ./my_workflows
+    """
+    try:
+        base_path = Path(workflows_dir)
+        if not base_path.exists():
+            typer.echo(f"[ERROR] Workflows directory not found: {workflows_dir}", err=True)
+            raise typer.Exit(1)
+        
+        # Find all workflow directories
+        workflow_dirs = sorted([d for d in base_path.iterdir() if d.is_dir() and d.name.startswith("workflow_")])
+        
+        if not workflow_dirs:
+            typer.echo(f"No workflows found in {workflows_dir}")
+            raise typer.Exit(0)
+        
+        typer.echo(f"\n[WORKFLOWS] Available Workflows ({len(workflow_dirs)} total)\n")
+        typer.echo(f"{'Session ID':<50} {'Timestamp':<25} {'Root':<20} {'Events':<8}")
+        typer.echo("-" * 120)
+        
+        for workflow_dir in workflow_dirs:
+            # Extract session ID from directory name
+            session_id = workflow_dir.name.replace("workflow_", "")
+            
+            # Load metadata
+            metadata_path = workflow_dir / "metadata.json"
+            if metadata_path.exists():
+                try:
+                    metadata = json.loads(metadata_path.read_text())
+                    timestamp = metadata.get("timestamp", "N/A")[:19]
+                    event_count = metadata.get("event_count", "?")
+                except:
+                    timestamp = "Error reading"
+                    event_count = "?"
+            else:
+                timestamp = "Unknown"
+                event_count = "?"
+            
+            # Load commitments for root
+            commitments_path = workflow_dir / "commitments.json"
+            if commitments_path.exists():
+                try:
+                    commitments = json.loads(commitments_path.read_text())
+                    session_root = commitments.get("session_root", "N/A")[:16] + "..."
+                except:
+                    session_root = "Error reading"
+            else:
+                session_root = "N/A"
+            
+            typer.echo(f"{session_id:<50} {timestamp:<25} {session_root:<20} {event_count:<8}")
+        
+        typer.echo()
+        typer.echo("📌 To verify a specific workflow:")
+        typer.echo("   verify-by-id <session-id>")
+        typer.echo("   get-workflow <session-id>")
+        
+    except typer.Exit:
+        raise
+    except Exception as e:
+        logger.exception("list_workflows_failed", error=str(e))
+        typer.echo(f"[ERROR] Error: {e}", err=True)
+        raise typer.Exit(1)
+
+
+@app.command()
+def get_workflow(
+    session_id: str = typer.Argument(..., help="Session ID to retrieve"),
+    workflows_dir: str = typer.Option("workflows", "--dir", "-d", help="Path to workflows directory")
+) -> None:
+    """
+    Get detailed metadata for a specific workflow.
+    
+    Shows:
+    - Session ID
+    - Timestamp
+    - Session Root (full)
+    - Event Accumulator Root
+    - Span roots
+    - Event count
+    - Span count
+    
+    Example:
+        get-workflow real-prompt-mcp-20260221-200134
+    """
+    try:
+        base_path = Path(workflows_dir)
+        workflow_dir = base_path / f"workflow_{session_id}"
+        
+        if not workflow_dir.exists():
+            typer.echo(f"[ERROR] Workflow not found: {session_id}", err=True)
+            typer.echo(f"  Searched in: {workflow_dir}", err=True)
+            raise typer.Exit(1)
+        
+        # Load metadata
+        metadata_path = workflow_dir / "metadata.json"
+        if not metadata_path.exists():
+            typer.echo(f"[ERROR] Metadata not found for workflow: {session_id}", err=True)
+            raise typer.Exit(1)
+        
+        metadata = json.loads(metadata_path.read_text())
+        
+        # Load commitments
+        commitments_path = workflow_dir / "commitments.json"
+        if commitments_path.exists():
+            commitments = json.loads(commitments_path.read_text())
+        else:
+            commitments = {}
+        
+        typer.echo(f"\n📊 Workflow Details: {session_id}\n")
+        
+        typer.echo(f"{typer.style('Metadata:', bold=True)}")
+        typer.echo(f"  Timestamp: {metadata.get('timestamp', 'N/A')}")
+        typer.echo(f"  Event Count: {metadata.get('event_count', 'N/A')}")
+        typer.echo(f"  Span Count: {metadata.get('span_count', 'N/A')}")
+        
+        typer.echo(f"\n{typer.style('Cryptographic Commitments:', bold=True)}")
+        typer.echo(f"  Session Root: {commitments.get('session_root', 'N/A')}")
+        
+        if 'span_roots' in commitments:
+            typer.echo(f"\n{typer.style('Span Roots:', bold=True)}")
+            for span_id, root in commitments['span_roots'].items():
+                root_display = root if len(root) < 40 else root[:37] + "..."
+                typer.echo(f"  {span_id}: {root_display}")
+        
+        # Show file paths
+        typer.echo(f"\n{typer.style('Files:', bold=True)}")
+        typer.echo(f"  Canonical Log: {workflow_dir / 'canonical_log.jsonl'}")
+        typer.echo(f"  Metadata: {metadata_path}")
+        typer.echo(f"  Commitments: {commitments_path}")
+        
+        # Verification command
+        session_root = commitments.get('session_root', '')
+        typer.echo(f"\n{typer.style('Verification Command:', bold=True)}")
+        typer.echo(f"  verify-by-id {session_id}")
+        if session_root:
+            typer.echo(f"  OR")
+            typer.echo(f"  verify {workflow_dir}/canonical_log.jsonl '{session_root}'")
+        
+        typer.echo()
+        
+    except typer.Exit:
+        raise
+    except Exception as e:
+        logger.exception("get_workflow_failed", error=str(e))
+        typer.echo(f"[ERROR] Error: {e}", err=True)
+        raise typer.Exit(1)
+
+
+@app.command()
+def verify_by_id(
+    session_id: str = typer.Argument(..., help="Session ID to verify"),
+    workflows_dir: str = typer.Option("workflows", "--dir", "-d", help="Path to workflows directory"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed verification steps"),
+    show_protocol: bool = typer.Option(False, "--show-protocol", help="Show protocol event breakdown")
+) -> None:
+    """
+    Verify a workflow by session ID.
+    
+    Automatically finds the workflow directory and verifies the canonical log.
+    More convenient than verify for historical workflows.
+    
+    Example:
+        verify-by-id real-prompt-mcp-20260221-200134
+        verify-by-id real-prompt-mcp-20260221-200134 --show-protocol
+    """
+    try:
+        base_path = Path(workflows_dir)
+        workflow_dir = base_path / f"workflow_{session_id}"
+        
+        if not workflow_dir.exists():
+            typer.echo(f"[ERROR] Workflow not found: {session_id}", err=True)
+            typer.echo(f"  Searched in: {workflow_dir}", err=True)
+            # Try to help user find it
+            if base_path.exists():
+                typer.echo(f"\n  Available workflows:", err=True)
+                for d in sorted(base_path.iterdir())[:5]:
+                    if d.is_dir() and d.name.startswith("workflow_"):
+                        typer.echo(f"    {d.name.replace('workflow_', '')}", err=True)
+            raise typer.Exit(1)
+        
+        # Load commitments to get the session root
+        commitments_path = workflow_dir / "commitments.json"
+        if not commitments_path.exists():
+            typer.echo(f"[ERROR] Commitments not found for workflow: {session_id}", err=True)
+            raise typer.Exit(1)
+        
+        commitments = json.loads(commitments_path.read_text())
+        session_root = commitments.get("session_root")
+        
+        if not session_root:
+            typer.echo(f"[ERROR] Session root not found in commitments for: {session_id}", err=True)
+            raise typer.Exit(1)
+        
+        # Get canonical log path
+        canonical_log_path = workflow_dir / "canonical_log.jsonl"
+        if not canonical_log_path.exists():
+            typer.echo(f"[ERROR] Canonical log not found: {canonical_log_path}", err=True)
+            raise typer.Exit(1)
+        
+        # Call the verify function with the found files
+        typer.echo(f"Verifying workflow: {session_id}")
+        if verbose:
+            typer.echo(f"  Canonical Log: {canonical_log_path}")
+            typer.echo(f"  Session Root: {session_root[:30]}...\n")
+        
+        # Perform verification (reuse existing verify logic)
+        with open(canonical_log_path, "r", encoding="utf-8") as f:
+            canonical_log = f.read()
+        
+        try:
+            expected_root = base64.b64decode(session_root)
+        except Exception as e:
+            typer.echo(f"[ERROR] Error: Invalid Base64 root: {e}", err=True)
+            raise typer.Exit(1)
+        
+        typer.echo(f"[OK] Loaded canonical log ({len(canonical_log):,} bytes)")
+        
+        try:
+            log_data = json.loads(canonical_log)
+        except json.JSONDecodeError as e:
+            typer.echo(f"[ERROR] Error: Invalid JSON in log file: {e}", err=True)
+            raise typer.Exit(1)
+        
+        events = log_data if isinstance(log_data, list) else [log_data]
+        typer.echo(f"[OK] Parsed {len(events)} events from log")
+        
+        if show_protocol:
+            app_events, protocol_events = categorize_events(events)
+            print_event_breakdown(app_events, protocol_events)
+        
+        typer.echo("Verifying Verkle tree root...")
+        
+        accumulator = VerkleAccumulator(session_id)
+        for event in events:
+            try:
+                accumulator.add_event(event)
+            except Exception as e:
+                typer.echo(f"[ERROR] Error processing event: {e}", err=True)
+                raise typer.Exit(1)
+        
+        try:
+            computed_root = accumulator.finalize()
+        except Exception as e:
+            typer.echo(f"[ERROR] Error finalizing Verkle tree: {e}", err=True)
+            raise typer.Exit(1)
+        
+        if computed_root == expected_root:
+            if show_protocol:
+                typer.echo(f"\n[OK] Verification PASSED [OK] (MCP Compliant)")
+            else:
+                typer.echo(f"\n[OK] Verification PASSED [OK]")
+            typer.echo(f"  Session ID: {session_id}")
+            typer.echo(f"  Root matches: {session_root[:30]}...")
+            typer.echo(f"  Events verified: {len(events)}")
+            raise typer.Exit(0)
+        else:
+            typer.echo(f"\n[ERROR] Verification FAILED [ERROR]", err=True)
+            typer.echo(f"  Expected root: {session_root[:30]}...", err=True)
+            typer.echo(f"  Computed root: {base64.b64encode(computed_root).decode()[:30]}...", err=True)
+            raise typer.Exit(1)
+        
+    except typer.Exit:
+        raise
+    except Exception as e:
+        logger.exception("verify_by_id_failed", error=str(e))
+        typer.echo(f"[ERROR] Error during verification: {e}", err=True)
         raise typer.Exit(1)
 
 

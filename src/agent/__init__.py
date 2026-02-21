@@ -11,17 +11,55 @@ Supports LLM-integrated agent loops with OpenRouter and Ollama.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Optional, Type
+from typing import TYPE_CHECKING, Any, Optional, Type, Union
 
 import structlog
 from pydantic import BaseModel, ValidationError, create_model
 
 if TYPE_CHECKING:
     from src.integrity import IntegrityMiddleware
-    from src.llm import OllamaClient
+    from src.llm import OllamaClient, OpenRouterClient
     from src.security import SecurityMiddleware
 
 logger = structlog.get_logger(__name__)
+
+
+class IntegrityMetadata(BaseModel):
+    """MCP 2024-11 compliant integrity metadata"""
+    session_root: str                           # Hierarchical commitment
+    event_accumulator_root: str                 # Flat event structure root
+    span_roots: dict[str, str]                  # Per-span roots
+    canonical_log_hash: str                     # SHA-256 of canonical log
+    event_count: int                            # Total events recorded
+    timestamp: str                              # Finalization time (ISO 8601)
+    
+    class Config:
+        frozen = False
+
+
+class AgentResponse(BaseModel):
+    """
+    MCP 2024-11 compliant agent response.
+    
+    Provides a structured contract for agent interactions with:
+    - Text output (LLM response)
+    - Integrity metadata (cryptographic verification)
+    - Session metadata (turn count, etc)
+    """
+    output: str                                 # LLM response text
+    integrity: IntegrityMetadata               # Cryptographic commitments
+    turns: int                                  # Number of interaction turns
+    
+    class Config:
+        frozen = False
+    
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dict for backward compatibility with demos"""
+        return {
+            "output": self.output,
+            "integrity": self.integrity.model_dump(),
+            "turns": self.turns
+        }
 
 
 class ToolDefinition:
@@ -213,7 +251,7 @@ class MCPServer:
     - Secure Transport Integration: Designed to work with `SecureMCPClient` 
       (src/transport/secure_mcp.py) for verifiable remote tool execution over WebSockets.
 
-    NOTE: We use a custom transport layer instead of standard FastMCP to ensure
+    NOTE: A custom transport layer is used instead of standard FastMCP to ensure
     byte-level canonicalization required for Verkle Tree commitments and 
     Identity-Based Signatures (IBS).
     """
@@ -274,6 +312,44 @@ class MCPServer:
                 ]
             }
         }
+    
+    def verify_protocol_version(self, remote_version: str) -> bool:
+        """
+        Verify protocol version compatibility with remote peer.
+        
+        Ensures remote is using MCP 2024-11 or compatible patch version.
+        Warns if mismatch detected.
+        
+        Args:
+            remote_version: Version string from remote peer (e.g., "2024-11", "2024-12")
+        
+        Returns:
+            True if version is compatible (2024-xx), False otherwise
+        """
+        expected_version = "2024-11"
+        
+        if remote_version == expected_version:
+            logger.info("protocol_version_verified", remote_version=remote_version)
+            return True
+        
+        if remote_version.startswith("2024-"):
+            # Accept 2024-xx patches for backward compatibility
+            logger.warning(
+                "protocol_version_mismatch_patch",
+                expected=expected_version,
+                remote=remote_version,
+                note="Using different 2024-xx patch; JSON-RPC format should be compatible"
+            )
+            return True
+        
+        # Major version mismatch
+        logger.error(
+            "protocol_version_incompatible",
+            expected=expected_version,
+            remote=remote_version,
+            note="Major version mismatch; cryptographic commitments may not be valid"
+        )
+        return False
     
     
     def register_tool(self, tool: ToolDefinition) -> None:
@@ -407,7 +483,14 @@ class AIAgent:
     Main agent class coordinating LLM, tools, and integrity tracking.
     This is the primary interface for running verifiable agent tasks.
     
-    Phase 2: Full LLM integration with tool calling and integrity tracking.
+    Supports both local and cloud-based LLM backends:
+    - OllamaClient: Local Ollama instance (requires local setup)
+    - OpenRouterClient: Cloud-based OpenRouter.ai API (requires API key)
+    
+    NOTE: Implements core MCP features (tools, invocation). 
+    Future: Resource reading, prompt templates, and notification subscriptions 
+    for full MCP 2024-11 compliance.
+
     """
     
     def __init__(
@@ -415,8 +498,32 @@ class AIAgent:
         integrity_middleware: IntegrityMiddleware,
         security_middleware: SecurityMiddleware,
         mcp_server: MCPServer,
-        llm_client: Optional[OllamaClient] = None
+        llm_client: Optional[Union["OllamaClient", "OpenRouterClient"]] = None
     ):
+        """
+        Initialize the AI Agent.
+        
+        Args:
+            integrity_middleware: Integrity tracking middleware
+            security_middleware: Security validation middleware
+            mcp_server: MCP server for tool management
+            llm_client: Optional LLM client (OllamaClient or OpenRouterClient)
+                       If None, uses dummy LLM for testing
+                       
+        Examples:
+            # Using local Ollama
+            from src.llm import OllamaClient
+            ollama = OllamaClient(model="llama2")
+            agent = AIAgent(..., llm_client=ollama)
+            
+            # Using cloud-based OpenRouter
+            from src.llm import OpenRouterClient
+            openrouter = OpenRouterClient(api_key="sk-or-...")
+            agent = AIAgent(..., llm_client=openrouter)
+            
+            # Using dummy LLM (for testing)
+            agent = AIAgent(...)  # llm_client=None by default
+        """
         self.integrity = integrity_middleware
         self.security = security_middleware
         self.mcp = mcp_server
@@ -447,83 +554,94 @@ class AIAgent:
         Returns:
             Final output with integrity metadata
         """
-        # Record initial prompt
+        # Start main span for entire agent execution
+        main_span_id = self.integrity.start_span("agent_run")
+        
+        # Record initial prompt (inside agent_run span)
         self.integrity.record_prompt(prompt)
-        
-        # Build tool schemas for LLM
-        tool_schemas = self.mcp.list_tools()
-        
-        conversation_history = [
-            {"role": "user", "content": prompt}
-        ]
         
         final_output = None
         turn_count = 0
         
         try:
+            # Build tool schemas for LLM
+            tool_schemas = self.mcp.list_tools()
+            
+            conversation_history = [
+                {"role": "user", "content": prompt}
+            ]
+            
             while turn_count < max_turns:
                 turn_count += 1
                 logger.info("agent_turn_start", turn=turn_count, session_id=self.integrity.session_id)
                 
-                # Call LLM
-                if self.llm_client is None:
-                    # Fallback: dummy implementation for testing without Ollama
-                    llm_response = self._dummy_llm_call(prompt)
-                else:
-                    llm_response = self.llm_client.call_llm(
-                        prompt=conversation_history[-1]["content"],
-                        tools=tool_schemas
-                    )
+                # Start span for this turn (auto-finalizes previous span)
+                turn_span_id = self.integrity.start_span(f"agent_turn_{turn_count}")
                 
-                # Check if LLM wants to call tools
-                if not llm_response.has_tool_calls():
-                    # No more tool calls - this is the final output
-                    final_output = llm_response.text
-                    logger.info("agent_final_output", output_len=len(final_output))
-                    break
-                
-                # Process each tool call
-                for tool_call in llm_response.tool_calls:
-                    logger.info("tool_call_requested", tool=tool_call.tool_name, args=tool_call.arguments)
-                    
-                    # Check authorization
-                    if not self.security.validate_tool_invocation(self.integrity.session_id, tool_call.tool_name):
-                        error_msg = f"Unauthorized tool: {tool_call.tool_name}"
-                        logger.warning("tool_call_blocked", tool=tool_call.tool_name)
-                        # Record as blocked tool attempt
-                        self.integrity.record_tool_input(tool_call.tool_name, tool_call.arguments)
-                        tool_result = f"Error: {error_msg}"
-                        self.integrity.record_tool_output(tool_call.tool_name, tool_result)
+                try:
+                    # Call LLM
+                    if self.llm_client is None:
+                        # Fallback: dummy implementation for testing without Ollama
+                        llm_response = self._dummy_llm_call(prompt)
                     else:
-                        # Record tool input
-                        self.integrity.record_tool_input(tool_call.tool_name, tool_call.arguments)
+                        llm_response = self.llm_client.call_llm(
+                            prompt=conversation_history[-1]["content"],
+                            tools=tool_schemas
+                        )
+                    
+                    # Check if LLM wants to call tools
+                    if not llm_response.has_tool_calls():
+                        # No more tool calls - this is the final output
+                        final_output = llm_response.text
+                        logger.info("agent_final_output", output_len=len(final_output))
+                        break
+                    
+                    # Process each tool call
+                    for tool_call in llm_response.tool_calls:
+                        logger.info("tool_call_requested", tool=tool_call.tool_name, args=tool_call.arguments)
                         
-                        # Execute tool
-                        try:
-                            tool_result = self.mcp.invoke_tool(
-                                tool_call.tool_name,
-                                tool_call.arguments
-                            )
-                            logger.info("tool_executed", tool=tool_call.tool_name, result=str(tool_result)[:100])
-                        except Exception as e:
-                            tool_result = f"Error executing tool: {str(e)}"
-                            logger.exception("tool_execution_error", tool=tool_call.tool_name)
-                        
-                        # Record tool output
-                        self.integrity.record_tool_output(tool_call.tool_name, tool_result)
-                
-                # Add assistant response to conversation for next turn
-                conversation_history.append({
-                    "role": "assistant",
-                    "content": llm_response.text
-                })
-                
-                # If tools were called, add a message indicating they were processed
-                if llm_response.tool_calls:
+                        # Check authorization
+                        if not self.security.validate_tool_invocation(self.integrity.session_id, tool_call.tool_name):
+                            error_msg = f"Unauthorized tool: {tool_call.tool_name}"
+                            logger.warning("tool_call_blocked", tool=tool_call.tool_name)
+                            # Record as blocked tool attempt
+                            self.integrity.record_tool_input(tool_call.tool_name, tool_call.arguments)
+                            tool_result = f"Error: {error_msg}"
+                            self.integrity.record_tool_output(tool_call.tool_name, tool_result)
+                        else:
+                            # Record tool input
+                            self.integrity.record_tool_input(tool_call.tool_name, tool_call.arguments)
+                            
+                            # Execute tool
+                            try:
+                                tool_result = self.mcp.invoke_tool(
+                                    tool_call.tool_name,
+                                    tool_call.arguments
+                                )
+                                logger.info("tool_executed", tool=tool_call.tool_name, result=str(tool_result)[:100])
+                            except Exception as e:
+                                tool_result = f"Error executing tool: {str(e)}"
+                                logger.exception("tool_execution_error", tool=tool_call.tool_name)
+                            
+                            # Record tool output
+                            self.integrity.record_tool_output(tool_call.tool_name, tool_result)
+                    
+                    # Add assistant response to conversation for next turn
                     conversation_history.append({
-                        "role": "user",
-                        "content": "Tools have been executed. Please continue or provide final answer."
+                        "role": "assistant",
+                        "content": llm_response.text
                     })
+                    
+                    # If tools were called, add a message indicating they were processed
+                    if llm_response.tool_calls:
+                        conversation_history.append({
+                            "role": "user",
+                            "content": "Tools have been executed. Please continue or provide final answer."
+                        })
+                
+                except Exception as e:
+                    logger.exception("turn_error", turn=turn_count, error=str(e))
+                    raise
             
             # Fallback if we hit max turns
             if final_output is None:
@@ -538,16 +656,32 @@ class AIAgent:
         if final_output:
             self.integrity.record_model_output(final_output)
         
-        # Finalize and commit
-        integrity_result = self.integrity.finalize()
+        # Start a final span to finalize all previous spans
+        # This ensures the last turn span gets finalized
+        final_span_id = self.integrity.start_span("agent_finalize")
         
-        logger.info("agent_run_completed", **integrity_result)
+        # Finalize and commit (this finalizes the last span and creates session root)
+        session_root, commitments, canonical_log_bytes = self.integrity.finalize()
         
-        return {
-            "output": final_output,
-            "integrity": integrity_result,
-            "turns": turn_count
-        }
+        # Build MCP 2024-11 compliant response
+        integrity_metadata = IntegrityMetadata(
+            session_root=session_root,
+            event_accumulator_root=commitments.event_accumulator_root,
+            span_roots=commitments.span_roots,
+            canonical_log_hash=commitments.canonical_log_hash,
+            event_count=commitments.event_count,
+            timestamp=commitments.timestamp
+        )
+        
+        response = AgentResponse(
+            output=final_output,
+            integrity=integrity_metadata,
+            turns=turn_count
+        )
+        
+        logger.info("agent_run_completed", session_root=session_root, event_count=commitments.event_count)
+        
+        return response.to_dict()  # Return dict for backward compatibility with demos
     
     def _dummy_llm_call(self, prompt: str) -> Any:
         """

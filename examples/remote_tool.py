@@ -39,7 +39,6 @@ from typing import Any, Dict
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from src.transport.secure_mcp import SecureMCPServer
-from src.crypto.encoding import canonicalize_json
 
 TOOL_NAME = "remote_calc"
 
@@ -73,10 +72,21 @@ if __name__ == "__main__":
     async def main():
         # Start the Secure Server (Modularized)
         server = SecureMCPServer(TOOL_NAME, port=5555)
+        
+        print("=" * 65)
+        print("[STARTING] Secure Remote Tool Server")
+        print("=" * 65)
+        print(f"Tool Name: {TOOL_NAME}")
+        print(f"Port: 5555")
+        print(f"Encryption: ECDH-AES256-GCM")
+        print(f"Signatures: IBS-BLS12-381")
+        print(f"\n[WAITING] Listening for agent connections...")
+        print("=" * 65 + "\n")
+        
         # Note: server.start is an async generator or loop manager
         await server.start(calculator_logic)
 
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("\nStopping...")
+        print("\n[STOPPED] Tool stopped.")

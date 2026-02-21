@@ -73,6 +73,7 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
         self.current_span_id: Optional[str] = None
         self.current_span_accumulator: Optional[VerkleAccumulator] = None
         self.current_span_counter: int = 0  # Per-span counter (resets per span)
+        self.span_counter: int = 0  # Global counter for deterministic span IDs
         self.span_roots: Dict[str, str] = {}
         
         # Session-level accumulator (accumulates span roots)
@@ -92,14 +93,20 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
             span_name: Name of the span (e.g., "mcp_initialize", "user_interaction")
             
         Returns:
-            span_id: Unique identifier for this span
+            span_id: Unique identifier for this span (deterministic and globally unique)
         """
         # Finalize current span if any
         if self.current_span_id:
             self._finalize_current_span()
         
-        # Create new span
-        self.current_span_id = f"{span_name}-{uuid.uuid4().hex[:8]}"
+        # Create span ID that is:
+        # 1. Deterministic within a session (uses counter, not UUID)
+        # 2. Globally unique across sessions and server restarts (includes session_id)
+        # Format: {session_id}_{span_name}_{counter}
+        # This complies with MCP 2024-11 standards for unique span identification
+        self.current_span_id = f"{self.session_id}_{span_name}_{self.span_counter}"
+        self.span_counter += 1
+        
         span = SpanMetadata(
             span_id=self.current_span_id,
             name=span_name,
@@ -117,6 +124,201 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
         
         logger.info("span_started", span_id=self.current_span_id, span_name=span_name)
         return self.current_span_id
+    
+    def end_span(self, span_id: Optional[str] = None) -> str:
+        """
+        Finalize the current span (or specified span).
+        
+        Args:
+            span_id: Optional span ID to finalize. If None, finalizes current span.
+            
+        Returns:
+            span_root: The Verkle root for the span (base64)
+        """
+        if span_id is not None and span_id != self.current_span_id:
+            logger.warning("end_span_mismatch", expected=self.current_span_id, requested=span_id)
+        return self._finalize_current_span()
+    
+    def record_prompt(self, prompt_text: str, metadata: dict[str, Any] | None = None) -> str:
+        """Override parent: Record prompt in current span (if active) and global accumulator"""
+        if self.finalized:
+            raise RuntimeError("Cannot record events after finalization")
+        
+        payload = {"prompt": prompt_text, **(metadata or {})}
+        signer_id = "server"
+        signature = self._sign_payload(payload, signer_id)
+        
+        event = IntegrityEvent(
+            session_id=self.session_id,
+            counter=self.counter,
+            timestamp=self._get_server_timestamp(),
+            event_type="prompt",
+            payload=payload,
+            signature=signature,
+            signer_id=signer_id
+        )
+        
+        event_dict = asdict(event)
+        
+        # Add to flat accumulator (for flat root computation)
+        self.accumulator.add_event(event_dict)
+        
+        # Add to span accumulator if span is active
+        if self.current_span_id and self.current_span_accumulator:
+            span_event_dict = asdict(event)
+            span_event_dict["span_id"] = self.current_span_id
+            span_event_dict["counter"] = self.current_span_counter
+            self.current_span_accumulator.add_event(span_event_dict)
+            self.current_span_counter += 1
+            self.events_by_span[self.current_span_id].append(event_dict)
+        
+        self.counter += 1
+        
+        # Log to Langfuse if available
+        if self.langfuse_client and self.trace_id:
+            self.langfuse_client.add_event_to_trace(
+                self.trace_id,
+                "user_prompt",
+                {"prompt": prompt_text, **(metadata or {})}
+            )
+        
+        logger.info("prompt_recorded", session_id=self.session_id, counter=event.counter)
+        return event.session_id
+    
+    def record_model_output(self, output_text: str, metadata: dict[str, Any] | None = None) -> None:
+        """Override parent: Record model output in current span (if active) and global accumulator"""
+        if self.finalized:
+            raise RuntimeError("Cannot record events after finalization")
+        
+        payload = {"output": output_text, **(metadata or {})}
+        signer_id = "server"
+        signature = self._sign_payload(payload, signer_id)
+        
+        event = IntegrityEvent(
+            session_id=self.session_id,
+            counter=self.counter,
+            timestamp=self._get_server_timestamp(),
+            event_type="model_output",
+            payload=payload,
+            signature=signature,
+            signer_id=signer_id
+        )
+        
+        event_dict = asdict(event)
+        
+        # Add to flat accumulator (for flat root computation)
+        self.accumulator.add_event(event_dict)
+        
+        # Add to span accumulator if span is active
+        if self.current_span_id and self.current_span_accumulator:
+            span_event_dict = asdict(event)
+            span_event_dict["span_id"] = self.current_span_id
+            span_event_dict["counter"] = self.current_span_counter
+            self.current_span_accumulator.add_event(span_event_dict)
+            self.current_span_counter += 1
+            self.events_by_span[self.current_span_id].append(event_dict)
+        
+        self.counter += 1
+        
+        # Log to Langfuse if available
+        if self.langfuse_client and self.trace_id:
+            self.langfuse_client.add_event_to_trace(
+                self.trace_id,
+                "model_output",
+                {"output": output_text, **(metadata or {})}
+            )
+        
+        logger.info("model_output_recorded", session_id=self.session_id, counter=event.counter)
+    
+    def record_tool_input(self, tool_name: str, input_args: dict[str, Any]) -> None:
+        """Override parent: Record tool input in current span (if active) and global accumulator"""
+        if self.finalized:
+            raise RuntimeError("Cannot record events after finalization")
+        
+        payload = {"tool_name": tool_name, "input": input_args}
+        signer_id = tool_name
+        signature = self._sign_payload(payload, signer_id)
+        
+        event = IntegrityEvent(
+            session_id=self.session_id,
+            counter=self.counter,
+            timestamp=self._get_server_timestamp(),
+            event_type="tool_input",
+            payload=payload,
+            signature=signature,
+            signer_id=signer_id
+        )
+        
+        event_dict = asdict(event)
+        
+        # Add to flat accumulator (for flat root computation)
+        self.accumulator.add_event(event_dict)
+        
+        # Add to span accumulator if span is active
+        if self.current_span_id and self.current_span_accumulator:
+            span_event_dict = asdict(event)
+            span_event_dict["span_id"] = self.current_span_id
+            span_event_dict["counter"] = self.current_span_counter
+            self.current_span_accumulator.add_event(span_event_dict)
+            self.current_span_counter += 1
+            self.events_by_span[self.current_span_id].append(event_dict)
+        
+        self.counter += 1
+        
+        # Log to Langfuse if available
+        if self.langfuse_client and self.trace_id:
+            self.langfuse_client.add_event_to_trace(
+                self.trace_id,
+                "tool_input",
+                {"tool_name": tool_name, "input": input_args}
+            )
+        
+        logger.info("tool_input_recorded", session_id=self.session_id, counter=event.counter, tool=tool_name)
+    
+    def record_tool_output(self, tool_name: str, output: Any) -> None:
+        """Override parent: Record tool output in current span (if active) and global accumulator"""
+        if self.finalized:
+            raise RuntimeError("Cannot record events after finalization")
+        
+        payload = {"tool_name": tool_name, "output": output}
+        signer_id = tool_name
+        signature = self._sign_payload(payload, signer_id)
+        
+        event = IntegrityEvent(
+            session_id=self.session_id,
+            counter=self.counter,
+            timestamp=self._get_server_timestamp(),
+            event_type="tool_output",
+            payload=payload,
+            signature=signature,
+            signer_id=signer_id
+        )
+        
+        event_dict = asdict(event)
+        
+        # Add to flat accumulator (for flat root computation)
+        self.accumulator.add_event(event_dict)
+        
+        # Add to span accumulator if span is active
+        if self.current_span_id and self.current_span_accumulator:
+            span_event_dict = asdict(event)
+            span_event_dict["span_id"] = self.current_span_id
+            span_event_dict["counter"] = self.current_span_counter
+            self.current_span_accumulator.add_event(span_event_dict)
+            self.current_span_counter += 1
+            self.events_by_span[self.current_span_id].append(event_dict)
+        
+        self.counter += 1
+        
+        # Log to Langfuse if available
+        if self.langfuse_client and self.trace_id:
+            self.langfuse_client.add_event_to_trace(
+                self.trace_id,
+                "tool_output",
+                {"tool_name": tool_name, "output": output}
+            )
+        
+        logger.info("tool_output_recorded", session_id=self.session_id, counter=event.counter, tool=tool_name)
     
     def record_event_in_span(
         self,
@@ -203,10 +405,11 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
         
         # Add span root to session accumulator as a synthetic event
         # This ensures session root is a function of all span roots
+        # NOTE: We do NOT include timestamp here to make verification deterministic
+        # The span's actual end time is already recorded in span metadata
         span_commitment_event = {
             "session_id": self.session_id,
             "counter": self.session_accumulator_counter,  # Session accumulator counter
-            "timestamp": span.end_time,
             "event_type": "span_commitment",
             "span_id": self.current_span_id,
             "span_name": span.name,
@@ -248,8 +451,9 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
         self.session_accumulator.finalize()
         session_root = self.session_accumulator.get_root_b64()
         
-        # Get canonical log
-        canonical_log = self.accumulator.get_canonical_log()
+        # Get canonical log from session accumulator (includes synthetic span_commitment events)
+        # This ensures verification can recompute the session root from the saved log
+        canonical_log = self.session_accumulator.get_canonical_log()
         if isinstance(canonical_log, str):
             canonical_log_bytes = canonical_log.encode('utf-8')
         else:
@@ -375,8 +579,9 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
         """
         base_dir.mkdir(parents=True, exist_ok=True)
         
-        # 1. Save canonical log
-        canonical_log = self.accumulator.get_canonical_log()
+        # 1. Save canonical log from session accumulator (includes span commitments)
+        # This matches the canonical log used to compute the session root
+        canonical_log = self.session_accumulator.get_canonical_log()
         log_path = base_dir / "canonical_log.jsonl"
         if isinstance(canonical_log, bytes):
             log_path.write_bytes(canonical_log)
@@ -407,9 +612,9 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
             "event_count": self.counter,
             "span_count": len(self.spans),
             "log_hash": hashlib.sha256(
-                self.accumulator.get_canonical_log()
-                if isinstance(self.accumulator.get_canonical_log(), bytes)
-                else self.accumulator.get_canonical_log().encode('utf-8')
+                self.session_accumulator.get_canonical_log()
+                if isinstance(self.session_accumulator.get_canonical_log(), bytes)
+                else self.session_accumulator.get_canonical_log().encode('utf-8')
             ).hexdigest(),
             "canonical_log_file": "canonical_log.jsonl",
             "spans_file": "spans_structure.json",
