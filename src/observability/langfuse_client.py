@@ -42,12 +42,10 @@ class LangfuseClient:
     - Generation: LLM API calls within a trace
     - Span: Tool calls or other operations
     
-    KNOWN ISSUE (TODO): The Langfuse dashboard shows session trace count as +2 more
-    than actual traces sent. This may be due to:
-    - Langfuse v2 counting observations/spans with traceId references as implicit traces
-    - The batch API creating session entries when observations reference unknown traceIds
-    - Session entries being created before the trace is flushed
-    Investigate by checking if observations sent before trace flush cause phantom traces.
+    PREVIOUS ISSUE (SEEMS FIXED): The Langfuse dashboard was showing duplicate
+    traces. This was fixed by ensuring the 'id' field is included in the trace
+    body (not just the batch item). With proper 'id' in body, Langfuse correctly
+    merges trace updates. Needs further testing to confirm fully resolved.
     
     MULTI-TRACE SUPPORT: This client supports multiple traces per session. Each
     create_trace() + flush_trace() cycle creates a separate trace. Complex workflows
@@ -66,6 +64,8 @@ class LangfuseClient:
         self.api_endpoint = self.settings.langfuse.api_endpoint
         self.current_trace_id: Optional[str] = None
         self._current_trace_data: Optional[dict] = None  # Store trace data for updates
+        self._trace_flushed: bool = False  # Track whether current trace has been sent to Langfuse
+        self._has_pending_updates: bool = False  # Track if there are updates since last flush
         self._pending_traces: list[tuple[str, dict]] = []  # (trace_id, trace_data) for multi-trace support
         self._auth: Optional[HTTPBasicAuth] = None
         
@@ -108,9 +108,12 @@ class LangfuseClient:
         """
         trace_id = str(uuid.uuid4())
         self.current_trace_id = trace_id
+        self._trace_flushed = False  # New trace, not yet sent
+        self._has_pending_updates = True  # New trace data needs to be sent
         
         # Build trace payload - store locally, don't send yet
         self._current_trace_data = {
+            "id": trace_id,  # Required for Langfuse to identify the trace
             "name": name,
             "sessionId": self.session_id,  # Links trace to session
             "userId": user_id or "default",
@@ -135,12 +138,26 @@ class LangfuseClient:
         and start a new one within the same session. After flushing with reset=True,
         you can call create_trace() again to start a new trace.
         
+        NOTE: Previous issue with duplicate traces on each trace-create call
+        appears to be fixed by including the 'id' field in the trace body.
+        Langfuse now properly updates existing traces. Needs further testing.
+        
         Args:
             reset: If True, reset trace state for next trace. If False, keep state
                    (used internally by update_trace to allow continued updates).
         """
         if not self.current_trace_id or not self._current_trace_data:
             logger.warning("no_trace_to_flush")
+            return
+        
+        # Skip if already flushed and no new updates (minimize duplicates)
+        if self._trace_flushed and not self._has_pending_updates:
+            logger.debug("langfuse_trace_skip_flush_no_updates", trace_id=self.current_trace_id)
+            if reset:
+                self.current_trace_id = None
+                self._current_trace_data = None
+                self._trace_flushed = False
+                self._has_pending_updates = False
             return
         
         self._send_batch([{
@@ -152,10 +169,15 @@ class LangfuseClient:
         
         logger.debug("langfuse_trace_flushed", trace_id=self.current_trace_id)
         
+        self._trace_flushed = True  # Mark as sent
+        self._has_pending_updates = False  # Updates sent
+        
         # Reset for next trace if requested (but keep session_id)
         if reset:
             self.current_trace_id = None
             self._current_trace_data = None
+            self._trace_flushed = False
+            self._has_pending_updates = False
     
     def record_generation(
         self,
@@ -200,11 +222,17 @@ class LangfuseClient:
             logger.warning("no_trace_for_generation", name=name)
             return ""
         
+        # Ensure trace is sent to Langfuse before adding generations
+        # (Langfuse needs the trace to exist before it can attach generations)
+        if not self._trace_flushed and self._current_trace_data:
+            self.flush_trace(reset=False)  # Send trace but keep state for updates
+        
         generation_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc)
         
         # Build generation payload (Langfuse GENERATION type)
         generation_body = {
+            "id": generation_id,  # Required for Langfuse to create the generation
             "traceId": trace_id,
             "type": "GENERATION",
             "name": name,
@@ -371,7 +399,10 @@ class LangfuseClient:
         Update a trace with input, output and metadata.
         
         Updates are accumulated locally and only sent when flush=True.
-        This prevents multiple trace entries from appearing in Langfuse.
+        
+        NOTE: Previous issue with duplicate traces appears to be fixed by
+        including the 'id' field in the trace body. Langfuse now properly
+        merges updates into the existing trace. Needs further testing.
         
         Args:
             trace_id: Trace ID to update (uses current if not provided)
@@ -389,6 +420,7 @@ class LangfuseClient:
         # Initialize trace data if not exists
         if self._current_trace_data is None:
             self._current_trace_data = {
+                "id": trace_id,  # Required for Langfuse to identify the trace
                 "name": "trace",
                 "sessionId": self.session_id,
                 "userId": "default",
@@ -396,19 +428,31 @@ class LangfuseClient:
                 "version": "mcp-2024-11",
             }
         
+        # Ensure id is always in body (for updates)
+        if "id" not in self._current_trace_data:
+            self._current_trace_data["id"] = trace_id
+        
         # Accumulate updates (don't send yet)
+        has_updates = False
         if input_data:
             self._current_trace_data["input"] = input_data
+            has_updates = True
         if output:
             self._current_trace_data["output"] = output
+            has_updates = True
         if metadata:
             # Merge metadata with existing
             existing_metadata = self._current_trace_data.get("metadata", {})
             self._current_trace_data["metadata"] = {**existing_metadata, **metadata}
+            has_updates = True
         if tags:
             # Extend tags with new ones
             existing_tags = self._current_trace_data.get("tags", [])
             self._current_trace_data["tags"] = list(set(existing_tags + tags))
+            has_updates = True
+        
+        if has_updates:
+            self._has_pending_updates = True
         
         # Only send if flush requested (don't reset - keep trace data for reference)
         if flush:

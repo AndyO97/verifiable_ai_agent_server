@@ -344,6 +344,75 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
         
         logger.info("model_output_recorded", session_id=self.session_id, counter=event.counter)
     
+    def record_llm_generation(
+        self,
+        prompt: str,
+        response: str,
+        model: str = "unknown",
+        name: str = "llm_call",
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        input_cost: float = 0.0,
+        output_cost: float = 0.0,
+        total_cost: float = 0.0,
+        turn: int = 0,
+    ) -> str:
+        """
+        Record an LLM generation for observability only (Langfuse).
+        
+        IMPORTANT: This method does NOT modify the integrity log or commitments.
+        It only sends data to Langfuse for observability purposes.
+        
+        Use this for multi-turn agents where you want visibility into each LLM call
+        without affecting cryptographic commitments.
+        
+        Args:
+            prompt: The input prompt sent to the LLM
+            response: The output response from the LLM
+            model: Model name
+            name: Generation name (e.g., "llm_call_turn_1")
+            input_tokens: Number of input tokens
+            output_tokens: Number of output tokens
+            input_cost: Input cost in USD
+            output_cost: Output cost in USD
+            total_cost: Total cost in USD
+            turn: Turn number for metadata
+            
+        Returns:
+            generation_id: Langfuse generation ID (empty string if Langfuse unavailable)
+        """
+        if not self.langfuse_client:
+            return ""
+        
+        # Ensure trace exists before recording generation
+        self._ensure_trace_exists(trace_name="agent_run", input_data=prompt[:200] if turn == 1 else None)
+        
+        generation_id = self.langfuse_client.record_generation(
+            name=name,
+            model=model,
+            prompt=prompt,
+            response=response,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            input_cost=input_cost,
+            output_cost=output_cost,
+            total_cost=total_cost,
+            metadata={
+                "session_id": self.session_id,
+                "span_id": self.current_span_id,
+                "turn": turn,
+            }
+        )
+        
+        logger.debug(
+            "llm_generation_recorded",
+            generation_id=generation_id,
+            turn=turn,
+            model=model
+        )
+        
+        return generation_id
+    
     def record_tool_input(self, tool_name: str, input_args: dict[str, Any]) -> None:
         """Record tool invocation input"""
         if self.finalized:
