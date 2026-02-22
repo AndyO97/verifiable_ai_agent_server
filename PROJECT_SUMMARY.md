@@ -1,8 +1,44 @@
 # 🎉 Project Summary: Verifiable AI Agent Server
 
 **Status:** Feature-complete and production-ready  
-**Last Updated:** February 20, 2026  
+**Last Updated:** February 21, 2026  
 **Test Suite:** 128+ tests passing ✅
+
+---
+
+## 🔄 Latest Session Updates (February 21, 2026)
+
+### ✅ Span Root Calculation Fixed
+- Fixed HierarchicalVerkleMiddleware to properly capture events in both flat AND span accumulators
+- Added 4 override methods: `record_prompt()`, `record_model_output()`, `record_tool_input()`, `record_tool_output()`
+- Fixed AIAgent.run() to call `start_span()` BEFORE `record_prompt()` so prompt is captured inside span
+- **Result:** All spans now show non-zero roots with accurate event counts
+
+### ✅ Modern Auditability Features for All Demos
+- Updated all three demos (real_prompt_demo, real_agent_demo, agent_remote_demo) with consistent audit trail section
+- Added 7 verified verification/archival commands per demo
+- Added venv-activated commands that users can copy-paste directly
+- Fixed manual verify command to use `session_root` instead of `event_accumulator_root`
+
+### ✅ Windows Compatibility Improvements
+- Replaced emoji characters (✓, ✗, 📋) in verify_cli.py with ASCII-safe alternatives ([OK], [ERROR], [WORKFLOWS])
+- Fixed encoding errors on Windows PowerShell
+- Added startup confirmation messages to remote_tool.py ([STARTING], [WAITING], [STOPPED])
+
+### ✅ Demo Improvements
+- Increased max_turns from 3/5 to 8 for multi-turn demos to allow complete agent responses
+- Fixed undefined print_header function in agent_remote_demo.py
+- Added shutil imports for canonical_log.jsonl copying
+
+### ✅ Cleanup
+- Deleted old debug scripts: check_log.py, check_events.py
+- Deleted old output files: demo.txt, demo_output.txt
+- Project directory now cleaner and more maintainable
+
+### ✅ Commit Summary
+- **Message:** "Fix span roots, update demos with modern auditability, and improve Windows compatibility"
+- **Changes:** 8 files modified, 1 file deleted
+- **Impact:** All demos verified working with real LLM calls and proper span roots
 
 ---
 

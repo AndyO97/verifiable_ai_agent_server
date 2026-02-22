@@ -600,11 +600,13 @@ def get_workflow(
         
         # Verification command
         session_root = commitments.get('session_root', '')
-        typer.echo(f"\n{typer.style('Verification Command:', bold=True)}")
-        typer.echo(f"  verify-by-id {session_id}")
+        typer.echo(f"\n{typer.style('Verification Commands:', bold=True)}")
+        typer.echo(f"\n  {typer.style('Recommended (by session ID):', dim=True)}")
+        typer.echo(f"    .\\venv\\Scripts\\Activate.ps1; python -m src.tools.verify_cli verify-by-id {session_id}")
         if session_root:
-            typer.echo(f"  OR")
-            typer.echo(f"  verify {workflow_dir}/canonical_log.jsonl '{session_root}'")
+            typer.echo(f"\n  {typer.style('Alternative (by file path):', dim=True)}")
+            canonical_log = workflow_dir / 'canonical_log.jsonl'
+            typer.echo(f'    .\\venv\\Scripts\\Activate.ps1; python -m src.tools.verify_cli verify "{canonical_log}" \'{session_root}\'')
         
         typer.echo()
         

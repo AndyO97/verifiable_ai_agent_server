@@ -2,6 +2,15 @@
 
 A high-integrity, self-hosted AI Agent Server built on the Model Context Protocol (MCP) with cryptographic commitment of all agent–LLM–tool interactions into a **Verkle Tree**.
 
+## 📋 Latest Updates (February 21, 2026)
+
+- **Windows Compatibility Fixed**: All emoji characters replaced with ASCII-safe alternatives ([OK], [ERROR], [WORKFLOWS]) for cp1252 encoding compatibility
+- **Demo Commands Improved**: All verification commands now include `.\\venv\\Scripts\\Activate.ps1` prefix for copy-paste readiness
+- **Root Type Corrected**: Manual verification commands now use correct `session_root` for canonical_log.jsonl (span_commitment events)
+- **Agent Response Completeness**: Increased `max_turns` from 3-5 to 8 for complete multi-turn interactions
+- **Remote Tool Feedback**: Added startup status messages ([STARTING], [WAITING], [STOPPED])
+- **Code Cleanup**: Removed obsolete debug files (check_log.py, check_events.py, demo.txt, demo_output.txt)
+
 ## 🎯 Core Features
 
 - **Immutable Run Logs**: All agent interactions (prompts, tool calls, model outputs) are canonically encoded and cryptographically committed
@@ -408,7 +417,7 @@ python -m src.tools.verify_cli verify real_workflow.jsonl "CtF/sK3Mj93lu7eXLCOFq
 python -m src.tools.verify_cli verify real_agent_workflow.jsonl "CtF/sK3Mj93lu7eXLCOFqwlAOsTP..." --verbose
 
 # Expected output
-✓ Verification PASSED ✓
+[OK] Verification PASSED [OK]
   Root matches: CtF/sK3Mj93lu7eXLCOFqwlAOsTP...
   Events verified: 5
 ```
@@ -639,7 +648,7 @@ python -m src.tools.verify_cli verify ./logs/run.json "CtF/sK3Mj93lu7eXLCOFqwlAO
 
 **Output on success:**
 ```
-✓ Verification PASSED ✓
+[OK] Verification PASSED [OK]
   Root matches: CtF/sK3Mj93lu7eX...
   Events verified: 4
 ```

@@ -53,7 +53,7 @@ Each test verifies:
   - Prompt recorded (counter=0)
   - Tool invocations captured (tool_input, tool_output pairs)
   - Final LLM output recorded
-  - Integrity metadata: session_id, event_count, verkle_root_b64, canonical_log_hash
+  - Integrity metadata: session_id, event_count, session_root, canonical_log_hash
   - Deterministic behavior with same events = same root (within same session)
 
 INTEGRATION POINTS TESTED
@@ -107,6 +107,7 @@ import pytest
 from src.llm import OllamaClient, LLMResponse, ToolCall
 from src.agent import AIAgent, MCPServer, ToolDefinition
 from src.integrity import IntegrityMiddleware
+from src.integrity.hierarchical_integrity import HierarchicalVerkleMiddleware
 from src.security import SecurityMiddleware
 
 
@@ -116,8 +117,8 @@ from src.security import SecurityMiddleware
 
 @pytest.fixture
 def integrity_middleware():
-    """Create integrity middleware instance"""
-    return IntegrityMiddleware("test-session-001")
+    """Create hierarchical integrity middleware instance"""
+    return HierarchicalVerkleMiddleware("test-session-001")
 
 
 @pytest.fixture
@@ -413,9 +414,10 @@ class TestIntegrityTrackingWithLLM:
         # Verify integrity metadata
         assert metadata["session_id"] == "test-session-001"
         assert metadata["event_count"] >= 4  # prompt, tool_in, tool_out, final_out
-        assert "verkle_root_b64" in metadata
+        assert "session_root" in metadata
+        assert "event_accumulator_root" in metadata
         assert "canonical_log_hash" in metadata
-        assert metadata["verkle_root_b64"] != ""
+        assert metadata["session_root"] != ""
     
     def test_integrity_deterministic_root(self, security_middleware, mcp_server, mock_ollama_client):
         """Test integrity generates deterministic Verkle root for same events"""
@@ -433,11 +435,11 @@ class TestIntegrityTrackingWithLLM:
         # Run with same events but different session IDs - roots should differ
         roots = []
         for i in range(2):
-            integrity = IntegrityMiddleware(f"deterministic-test-{i}")
+            integrity = HierarchicalVerkleMiddleware(f"deterministic-test-{i}")
             mock_ollama_client.call_llm.side_effect = [tool_response, final_response]
             agent = AIAgent(integrity, security_middleware, mcp_server, mock_ollama_client)
             result = agent.run("5 + 3 = ?", max_turns=5)
-            roots.append(result["integrity"]["verkle_root_b64"])
+            roots.append(result["integrity"]["session_root"])
         
         # Roots may differ due to different session IDs, but structure should be valid
         assert roots[0] != ""

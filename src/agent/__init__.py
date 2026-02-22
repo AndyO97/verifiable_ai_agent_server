@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Optional, Type, Union
 
 import structlog
-from pydantic import BaseModel, ValidationError, create_model
+from pydantic import BaseModel, ConfigDict, ValidationError, create_model
 
 if TYPE_CHECKING:
     from src.integrity import IntegrityMiddleware
@@ -26,15 +26,15 @@ logger = structlog.get_logger(__name__)
 
 class IntegrityMetadata(BaseModel):
     """MCP 2024-11 compliant integrity metadata"""
+    model_config = ConfigDict(frozen=False)
+    
+    session_id: str                             # Session identifier
     session_root: str                           # Hierarchical commitment
     event_accumulator_root: str                 # Flat event structure root
     span_roots: dict[str, str]                  # Per-span roots
     canonical_log_hash: str                     # SHA-256 of canonical log
     event_count: int                            # Total events recorded
     timestamp: str                              # Finalization time (ISO 8601)
-    
-    class Config:
-        frozen = False
 
 
 class AgentResponse(BaseModel):
@@ -46,12 +46,11 @@ class AgentResponse(BaseModel):
     - Integrity metadata (cryptographic verification)
     - Session metadata (turn count, etc)
     """
+    model_config = ConfigDict(frozen=False)
+    
     output: str                                 # LLM response text
     integrity: IntegrityMetadata               # Cryptographic commitments
     turns: int                                  # Number of interaction turns
-    
-    class Config:
-        frozen = False
     
     def to_dict(self) -> dict[str, Any]:
         """Convert to dict for backward compatibility with demos"""
@@ -665,6 +664,7 @@ class AIAgent:
         
         # Build MCP 2024-11 compliant response
         integrity_metadata = IntegrityMetadata(
+            session_id=self.integrity.session_id,
             session_root=session_root,
             event_accumulator_root=commitments.event_accumulator_root,
             span_roots=commitments.span_roots,
