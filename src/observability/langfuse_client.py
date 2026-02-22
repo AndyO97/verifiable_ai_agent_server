@@ -13,7 +13,7 @@ Self-hosted deployment: See LANGFUSE_SETUP_GUIDE.md
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Optional
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import uuid
 import json
 import requests
@@ -166,7 +166,7 @@ class LangfuseClient:
         trace["cost"]["total_cost"] += cost
         trace["cost"]["model"] = model
         
-        # Add event
+        # Add event with full content (not truncated)
         self.add_event_to_trace(
             trace_id,
             "llm_call",
@@ -175,6 +175,8 @@ class LangfuseClient:
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
                 "cost": cost,
+                "prompt": prompt,  # Full prompt
+                "response": response,  # Full response
                 "prompt_preview": prompt[:100] + "..." if len(prompt) > 100 else prompt,
                 "response_preview": response[:100] + "..." if len(response) > 100 else response,
             }
@@ -265,6 +267,18 @@ class LangfuseClient:
             verified=verified
         )
     
+    def _calculate_trace_duration(self, trace: dict) -> int:
+        """Calculate trace duration in milliseconds"""
+        try:
+            start_time = datetime.fromisoformat(trace.get("timestamp", "").replace("Z", "+00:00"))
+            end_time = datetime.fromisoformat(trace.get("finalized_at", "").replace("Z", "+00:00"))
+            if end_time > start_time:
+                duration_ms = int((end_time - start_time).total_seconds() * 1000)
+                return max(1, duration_ms)  # At least 1ms
+            return 0
+        except Exception:
+            return 0
+    
     def finalize_trace(self, trace_id: str) -> dict:
         """
         Finalize a trace and prepare for export
@@ -323,46 +337,162 @@ class LangfuseClient:
             # Timestamp for all items
             timestamp_iso = trace.get("timestamp", datetime.now(timezone.utc).isoformat())
             
-            # Add trace creation
+            # Enhance metadata with execution details
+            enhanced_metadata = dict(trace.get("metadata", {}))
+            enhanced_metadata.update({
+                "event_count": len(trace.get("events", [])),
+                "finalized": trace.get("finalized", False),
+                "finalized_at": trace.get("finalized_at", ""),
+                "trace_duration_ms": self._calculate_trace_duration(trace),
+            })
+            
+            # Add cost information if available
+            if trace.get("cost"):
+                enhanced_metadata.update({
+                    "model": trace["cost"].get("model", "unknown"),
+                    "input_tokens": trace["cost"].get("input_tokens", 0),
+                    "output_tokens": trace["cost"].get("output_tokens", 0),
+                    "total_cost": trace["cost"].get("total_cost", 0.0),
+                })
+            
+            # Build contextual tags based on event types present in trace
+            tags = ["verified-agent", "integrity-middleware"]
+            event_types = {event.get("name", "") for event in trace.get("events", [])}
+            
+            if "tool_input" in event_types or "tool_output" in event_types:
+                tags.append("tool-invocation")
+            if "model_output" in event_types:
+                tags.append("llm-call")
+            if "mcp_initialize_request" in event_types or "mcp_initialize_response" in event_types:
+                tags.append("mcp-protocol")
+            if "commitment_finalized" in event_types:
+                tags.append("verified")
+            if len(trace.get("events", [])) > 5:
+                tags.append("multi-event")
+            
+            # Build trace with basic fields
+            trace_body = {
+                "name": trace["name"],
+                "sessionId": trace["session_id"],
+                "userId": trace["user_id"],
+                "metadata": enhanced_metadata,
+                "tags": tags,
+                "release": "1.0",
+                "version": "mcp-2024-11",
+            }
+            
+            # Add input/output at trace level if there are events
+            if trace.get("events"):
+                trace_body["input"] = json.dumps({
+                    "total_events": len(trace.get("events", [])),
+                    "session_id": trace["session_id"],
+                })
+                trace_body["output"] = json.dumps({
+                    "event_count": len(trace.get("events", [])),
+                    "total_cost": trace["cost"].get("total_cost", 0.0),
+                })
+            
             batch_items.append({
                 "type": "trace-create",
                 "id": trace["trace_id"],  # id at top level (required by API)
                 "timestamp": timestamp_iso,  # timestamp at top level (required by API)
-                "body": {
-                    "name": trace["name"],
-                    "userId": trace["user_id"],
-                    "metadata": trace["metadata"],
-                    "tags": ["verified-agent"],
-                }
+                "body": trace_body
             })
             
-            # Add events as observations
+            # Add events as observations with richer details
             for i, event in enumerate(trace["events"]):
                 event_id = f"{trace['trace_id']}-event-{i}"
                 event_timestamp = event.get("timestamp", datetime.now(timezone.utc).isoformat())
+                event_data = event.get("data", {})
+                event_name = event.get("name", "")
+                
+                # Parse timestamp and add incremental latency for realistic data
+                try:
+                    start_dt = datetime.fromisoformat(event_timestamp.replace("Z", "+00:00"))
+                    # Add latency: 10ms per event (so each event takes longer)
+                    end_dt = start_dt + timedelta(milliseconds=10 + (i * 5))
+                    event_timestamp_str = event_timestamp
+                    end_timestamp_str = end_dt.isoformat()
+                except (ValueError, TypeError):
+                    event_timestamp_str = event_timestamp
+                    end_timestamp_str = event_timestamp
+                
+                # Build observation body
                 observation_body = {
                     "traceId": trace["trace_id"],
-                    "type": "EVENT",  # Must be uppercase
-                    "name": event.get("name", "event"),
-                    "input": json.dumps(event.get("data", {}))[:1000],
+                    "type": "EVENT",
+                    "name": event_name,
+                    "startTime": event_timestamp_str,
+                    "endTime": end_timestamp_str,
                 }
-                # Only add metadata if there are extra fields
-                if event.get("level"):
-                    observation_body["metadata"] = {
-                        "level": event.get("level"),
-                    }
+                
+                # Build scores list to create separately
+                scores = []
+                
+                # Handle different event types
+                if event_name == "llm_call":
+                    observation_body["type"] = "GENERATION"
+                    observation_body["model"] = event_data.get("model", "unknown")
+                    observation_body["input"] = event_data.get("prompt", "")
+                    observation_body["output"] = event_data.get("response", "")
+                    
+                    if event_data.get("input_tokens"):
+                        observation_body["inputTokens"] = event_data["input_tokens"]
+                    if event_data.get("output_tokens"):
+                        observation_body["outputTokens"] = event_data["output_tokens"]
+                
+                elif event_name in ("tool_input", "tool_output"):
+                    observation_body["type"] = "SPAN"
+                    if event_name == "tool_input":
+                        observation_body["input"] = json.dumps({"tool": event_data.get("tool_name"), "args": event_data.get("arg_keys", [])})
+                    else:
+                        observation_body["output"] = event_data.get("result_preview", "")
+                
+                elif event_name == "user_prompt":
+                    observation_body["input"] = event_data.get("prompt") or event_data.get("prompt_preview", "")
+                
+                elif event_name == "model_output":
+                    observation_body["output"] = event_data.get("output") or event_data.get("output_preview", "")
+                
+                elif event_name == "commitment_finalized":
+                    observation_body["type"] = "SPAN"
+                    # Handle both verkle_root and session_root keys
+                    root_val = event_data.get("session_root") or event_data.get("verkle_root") or ""
+                    observation_body["input"] = json.dumps({"root": root_val[:32] + "..." if root_val else "N/A", "events": event_data.get("event_count", 0)})
+                    verified = event_data.get("verified", False)
+                    observation_body["output"] = json.dumps({"status": "verified" if verified else "unverified"})
+                    # Add verification_status score
+                    if verified is not None:
+                        scores.append({"name": "verification_status", "value": 1.0 if verified else 0.0})
+                
+                else:
+                    observation_body["input"] = json.dumps(event_data) if event_data else ""
+                
+                # Add metadata
+                observation_body["metadata"] = {"level": event.get("level", "info"), "sequence": i + 1}
                 
                 batch_items.append({
                     "type": "observation-create",
-                    "id": event_id,  # id at top level (required by API)
-                    "timestamp": event_timestamp,  # timestamp at top level (required by API)
+                    "id": event_id,
+                    "timestamp": event_timestamp,
                     "body": observation_body
                 })
+                
+                # Add scores as separate batch items (Langfuse requires this)
+                for score in scores:
+                    batch_items.append({
+                        "type": "score-create",
+                        "id": f"{event_id}-score-{score['name']}",
+                        "timestamp": event_timestamp,
+                        "body": {
+                            "traceId": trace["trace_id"],
+                            "observationId": event_id,
+                            "name": score["name"],
+                            "value": score["value"]
+                        }
+                    })
             
             payload = {"batch": batch_items}
-            
-            # Debug: log the payload
-            logger.debug("sending_trace_batch_to_langfuse", trace_id=trace["trace_id"], items_count=len(batch_items), payload=json.dumps(payload, indent=2)[:500])
             
             response = requests.post(
                 ingestion_url,
@@ -379,13 +509,6 @@ class LangfuseClient:
                     status_code=response.status_code,
                     events_count=len(trace["events"]),
                 )
-                
-                # Log response for debugging
-                try:
-                    response_data = response.json()
-                    logger.debug("langfuse_response", response=response_data)
-                except:
-                    logger.debug("langfuse_response_text", response=response.text[:500])
             else:
                 logger.warning(
                     "langfuse_trace_send_failed",

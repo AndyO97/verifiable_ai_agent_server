@@ -85,12 +85,17 @@ class IntegrityMiddleware:
                 return
             
             self.langfuse_client = LangfuseClient(self.session_id)
+            # Use more descriptive trace name with full session ID
+            trace_name = f"agent_verified_{self.session_id}"
             self.trace_id = self.langfuse_client.create_trace(
-                name="agent_run_with_mcp",
+                name=trace_name,
                 metadata={
                     "protocol_version": "MCP-2024-11",
                     "jsonrpc": "2.0",
-                    "session_id": self.session_id
+                    "session_id": self.session_id,
+                    "middleware_type": "integrity",
+                    "cryptography": "KZG-BLS12-381",
+                    "encoding": "RFC-8785"
                 }
             )
             logger.info("langfuse_initialized", trace_id=self.trace_id)
