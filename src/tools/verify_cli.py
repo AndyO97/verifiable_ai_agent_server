@@ -520,7 +520,7 @@ def list_workflows(
             typer.echo(f"{session_id:<50} {timestamp:<25} {session_root:<20} {event_count:<8}")
         
         typer.echo()
-        typer.echo("📌 To verify a specific workflow:")
+        typer.echo("[NOTE] To verify a specific workflow:")
         typer.echo("   verify-by-id <session-id>")
         typer.echo("   get-workflow <session-id>")
         
@@ -576,7 +576,7 @@ def get_workflow(
         else:
             commitments = {}
         
-        typer.echo(f"\n📊 Workflow Details: {session_id}\n")
+        typer.echo(f"\n[WORKFLOW] Details: {session_id}\n")
         
         typer.echo(f"{typer.style('Metadata:', bold=True)}")
         typer.echo(f"  Timestamp: {metadata.get('timestamp', 'N/A')}")

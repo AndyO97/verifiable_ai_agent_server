@@ -187,83 +187,96 @@ python real_prompt_demo.py
 
 ```
 ================================================================================
-                  REAL-TIME AI AGENT WORKFLOW WITH INTEGRITY TRACKING
+       REAL-TIME AI AGENT WORKFLOW WITH MCP 2024-11 + INTEGRITY TRACKING        
 ================================================================================
 
-This is a REAL agent interaction:
-  - User sends a prompt to OpenRouter API
+This is a REAL agent interaction with full MCP protocol compliance:
+  - User sends prompt through AIAgent to OpenRouter API
   - LLM provides genuine response
-  - All communication is integrity-tracked
-  - Verkle tree built with KZG commitments
+  - All communication in MCP 2024-11 format
+  - Full protocol versioning and initialization
+  - All events integrity-tracked with Verkle trees
   - Cryptographically verifiable proof created
   - Anyone can verify what really happened
 
->> STEP 1: Initialize Integrity Tracking
+>> STEP 1: Initialize MCP 2024-11 Protocol & Integrity Tracking
 
-[OK] Canonical JSON Encoder initialized (RFC 8785)
-[OK] Verkle Accumulator initialized (KZG commitments, BLS12-381)
-[OK] Session ID: real-agent-20260131-142530
+[OK] MCP Protocol Handler initialized (version 2024-11)
+[OK] MCPServer initialized
+[OK] HierarchicalVerkleMiddleware initialized
+[OK] Langfuse tracing enabled (traces at http://localhost:3000)
+[OK] Session ID: real-prompt-mcp-20260222-143944
 [OK] Model: arcee-ai/trinity-large-preview:free
 
->> STEP 2: User Sends Prompt to Agent
+>> STEP 2: Initialize LLM Client
 
-[2025-01-31T14:25:30.123456] USER_PROMPT: Explain Verkle trees in one paragraph...
-SHA-256 Hash: a1f2e3d4c5b6a7f8e9d0c1b2a3f4e5d6
+[OK] OpenRouter LLM client connected
 
->> STEP 4: Making REAL OpenRouter API Call
+>> STEP 3: User Interaction
+
+[2026-02-22T14:39:51.086031] USER_PROMPT: Explain Verkle trees in one paragraph.
+[OK] User prompt recorded
+
+>> STEP 4: Making REAL OpenRouter API Call via AIAgent
 
 Sending request to OpenRouter...
+Prompt: Explain Verkle trees in one paragraph. Be concise but technical.
 
->> STEP 5: LLM Response Received
+>> STEP 5: LLM Response
 
-[2025-01-31T14:25:32.654321] LLM_RESPONSE: Verkle trees are a cutting-edge 
-cryptographic data structure that combines the efficiency of Merkle trees...
+[2026-02-22T14:40:09.989373] LLM_RESPONSE: Verkle trees are a data structure that 
+enables efficient verification of large amounts of data in blockchain systems...
+[OK] LLM response received and recorded
 
-SHA-256 Hash: b2g3f4e5d6c7b8a9f0e1d2c3b4a5f6e7
+>> STEP 6: Finalize Hierarchical Verkle Tree and Generate Session Root
 
-================================================================================
-                            INTEGRITY REPORT
-================================================================================
+[OK] Verkle tree finalized with integrity verification
 
-Communication Summary:
-  - Total Events: 4
-  - Event Types: user_prompt, agent_routing, llm_response, final_response
-  - Total Hashes Computed: 5 (each event + final root)
+Cryptographic Commitment:
+  Session Root (Base64): DmBn8+/fBTI3uYOIxP9hHwUK8E6m6EfUye6o3CJC4PoDChpKNPhvgQa
+RJ+QZjk/6
+
+Hierarchical Span Structure:
+  - real-prompt-mcp-20260222-143944_agent_run_0: 1 events
+  - real-prompt-mcp-20260222-143944_agent_turn_1_1: 1 events
+  - real-prompt-mcp-20260222-143944_agent_finalize_2: 0 events
+
+>> STEP 7: Verify Integrity of Complete Log
+
+[OK] VERIFICATION SUCCESSFUL!
+Complete agent trace verified
+
+Root Verification Details:
+  Session Root (Hierarchical): DmBn8+/fBTI3uYOIxP9hHwUK8E6m6EfUye6o3CJC4PoDChpKN
+PhvgQaRJ+QZjk/6
+
+>> STEP 8: Comprehensive Integrity Report
+
+Interaction Summary:
+  - Total Spans: 3
+  - Protocol Version: 2024-11
+  - LLM: arcee-ai/trinity-large-preview:free
 
 Cryptographic Details:
   - Curve: BLS12-381 (elliptic curve pairing)
-  - Commitment Scheme: KZG (Kate-Zaverucha-Goldberg)
+  - Commitment Scheme: Hierarchical KZG + Verkle (per-span + session root)
   - Hash Algorithm: SHA-256
-  - Encoding: RFC 8785 (canonical JSON)
+  - Encoding: RFC 8785 JSON Canonical + OpenTelemetry
   - Root Size: 48 bytes (compressed point)
 
 Verification Status:
   - Log Integrity: [OK] VERIFIED
-  - Root Match: [OK] VERIFIED
+  - Session Root Match: [OK] VERIFIED
+  - Hierarchical Spans: [OK] VERIFIED
+  - Response Authenticity: [OK] VERIFIED
   - Overall Status: [OK] ALL CHECKS PASSED
 
 What This Proves:
   - OpenRouter returned this exact response at this time
   - User asked this exact question
+  - All communication followed MCP 2024-11 specification
   - No tampering occurred
   - Independently verifiable by anyone
-
-Root Commitment: CtF/sK3Mj93lu7eXLCOFqwlAOsTP2jBKgeX1d5+TcUTgImYOO6ysBh9qncC6m/q5
-
-Canonical log saved to: real_workflow.jsonl
-
->> STEP 12: Langfuse Trace Export (Optional - Free Local Deployment)
-
-If Langfuse is running, traces are automatically exported:
-
-[OK] OpenTelemetry spans exported to Langfuse:
-  Trace ID: 550e8400-e29b-41d4-a716-446655440000
-  Status: Sent to http://localhost:3000
-  
-In Langfuse dashboard, you'll see:
-  - Root span: agent_run (with session ID and duration)
-  - Trace ID for cross-referencing with verification CLI
-  - (Child spans visibility depends on instrumentation configuration)
 ```
 
 **Key Features Demonstrated:**
@@ -300,90 +313,104 @@ python real_agent_demo.py
           REAL-TIME AI AGENT WITH TOOL INVOCATION & INTEGRITY TRACKING
 ================================================================================
 
-This is a REAL agent interaction with TOOL INVOCATION:
+This is a REAL agent interaction with TOOL INVOCATION using AIAgent:
   - User sends a prompt with available tools
   - LLM decides which tools to use
-  - Agent executes tool calls
+  - AIAgent executes tool calls
   - Tool results are fed back to LLM
   - All interactions are integrity-tracked with Verkle trees
+  - Complete agent trace is cryptographically verifiable
 
->> STEP 1: Initialize Integrity Tracking
+>> STEP 1: Initialize AIAgent with LLM Client & Middleware
 
-[OK] Canonical JSON Encoder initialized (RFC 8785)
-[OK] Verkle Accumulator initialized (KZG commitments, BLS12-381)
-[OK] Session ID: real-agent-20260131-143015
+[OK] IntegrityMiddleware initialized (hierarchical spans + Langfuse)
+[OK] Langfuse tracing enabled (traces at http://localhost:3000)
+[OK] MCPServer initialized with 4 tools
+[OK] Session ID: real-agent-mcp-20260222-144247
 [OK] Model: arcee-ai/trinity-large-preview:free
-[OK] Available tools: 4
+[OK] OpenRouter LLM client connected
+[OK] AIAgent initialized with OpenRouter
 
->> STEP 2: User Sends Prompt with Tool Access
+>> STEP 2: Run Agent with Multi-Turn Tool Invocation
 
-[2025-01-31T14:30:15.234567] USER_PROMPT: I need your help understanding 
-Verkle tree efficiency. Please use tools to query info and calculate...
+[2026-02-22T14:42:53.740201] USER_PROMPT: I need your help understanding the efficiency benefits of Ve...
+[OK] User prompt recorded
 
-Available Tools:
-  - get_current_time: Get the current date and time
-  - calculate: Evaluate mathematical expressions
-  - get_crypto_info: Get information about cryptographic concepts
-  - query_verkle: Get information about Verkle trees
+LLM Decision: Tool calls needed
 
->> STEP 3: Agent Interaction with Tool Invocation
+[TOOL_CALL] query_verkle('proof sizes')
+  → No information available for 'proof sizes'. Available queries: efficiency, proof-size...
+  [OK] Tool executed and recorded
 
-LLM Decision: Tool calls needed (3 operations)
+>> STEP 3: Agent Execution Results
 
-[TOOL_CALL] query_verkle("proof-size")
-  → Verkle tree proofs are approximately 3.5KB compared to 7MB for Merkle trees
-  SHA-256: c3h4g5f6e7d8c9b0a1f2e3d4c5b6a7f8
+Final Output:
+I see that the tools have been executed, but I don't have any specific information about what was requested or what the results were. Could you please provide more context or clarify what you'd like me to do with the tool outputs?
 
-[TOOL_CALL] get_crypto_info("KZG")
-  → Kate-Zaverucha-Goldberg polynomial commitments enable proving 
-  evaluations with O(1) sized commitments and proofs
-  SHA-256: d4i5h6g7f8e9d0c1b2a3f4e5d6c7b8a9
+Execution Summary:
+  Turns: 2
+  Session ID: real-agent-mcp-20260222-144247
+  Model: arcee-ai/trinity-large-preview:free
 
-[TOOL_CALL] calculate("7000000 / 3500")
-  → 2000
-  SHA-256: e5j6i7h8g9f0e1d2c3b4a5f6e7d8c9b0
+>> STEP 4: Finalize Hierarchical Verkle Tree and Generate Session Root
 
-LLM Response (synthesizing results):
-  "Based on my calculations and research, Verkle trees provide approximately 
-  2000x bandwidth improvement over Merkle trees for state verification..."
+[OK] Hierarchical Verkle tree finalized with integrity verification
 
-================================================================================
-                         COMPLETE AGENT TRACE
-================================================================================
+Cryptographic Commitment:
+  Session Root (Base64): ECUu4fr//g4ZPLX65PFfWPGgYeLail+ViFCK6VsW1WUmuwce842m/PI1mfXWpuRB
 
-Events Recorded: 5
-  1. user_prompt (session start)
-  2. tool_call (query_verkle)
-  3. tool_call (get_crypto_info)
-  4. tool_call (calculate)
-  5. final_response (agent completed)
+Hierarchical Span Structure:
+  - real-agent-mcp-20260222-144247_agent_run_0: 1 events
+  - real-agent-mcp-20260222-144247_agent_turn_1_1: 2 events
+  - real-agent-mcp-20260222-144247_agent_turn_2_2: 1 events
+  - real-agent-mcp-20260222-144247_agent_finalize_3: 0 events
 
-Cryptographic Commitment: CtF/sK3Mj93lu7eXLCOFqwlAOsTP2jBKgeX1d5+TcUTgImYOO6ysBh9qncC6m/q5
+>> STEP 5: Verify Integrity of Complete Log
+
+[OK] VERIFICATION SUCCESSFUL!
+Complete agent trace verified
+
+Root Verification Details:
+  Session Root (Hierarchical): ECUu4fr//g4ZPLX65PFfWPGgYeLail+ViFCK6VsW1WUmuwce842m/PI1mfXWpuRB
+
+>> STEP 6: Verify Hierarchical Span Structure and MCP Protocol Compliance
+
+Hierarchical Span Structure:
+  [OK] Spans: 4
+       - real-agent-mcp-20260222-144247_agent_run_0: 1 events
+       - real-agent-mcp-20260222-144247_agent_turn_1_1: 2 events
+       - real-agent-mcp-20260222-144247_agent_turn_2_2: 1 events
+       - real-agent-mcp-20260222-144247_agent_finalize_3: 0 events
+
+MCP 2024-11 Protocol Compliance:
+  [OK] Protocol Version: 2024-11
+  [OK] JSON-RPC Version: 2.0
+  [OK] Tool Invocation: Supported
+  [OK] Multi-Turn Conversations: Supported
+
+>> STEP 8: Comprehensive Integrity Report
+
+Summary:
+  - Total LLM Turns: 2
+  - Tools Available: 4
+  - Spans Recorded: 4
+  - Protocol Used: MCP 2024-11 with JSON-RPC 2.0
+
+Cryptographic Details:
+  - Curve: BLS12-381 (elliptic curve pairing)
+  - Commitment Scheme: Hierarchical KZG + Verkle (per-span + session root)
+  - Hash Algorithm: SHA-256
+  - Encoding: RFC 8785 JSON Canonical Serialization
 
 What This Proves:
-  - Exact sequence of LLM decisions and tool calls
-  - Exact tool outputs and parameters
-  - LLM couldn't have changed responses without breaking the commitment
-  - Anyone can verify this trace independently
+  - Exact sequence of LLM decisions and tool calls across spans
+  - Tool inputs and outputs are tamper-evident
+  - Complete hierarchical agent trace with per-span Verkle roots
+  - All communication in JSON-RPC 2.0 format with request ID correlation
+  - Independently verifiable by anyone at span or session level
+```
 
-Verification Status: [OK] ALL CHECKS PASSED
-
-Canonical log saved to: real_agent_workflow.jsonl
-
->> STEP 11: Langfuse Trace Export (Optional - Free Local Deployment)
-
-If Langfuse is running, agent trace is automatically exported:
-
-[OK] OpenTelemetry spans exported to Langfuse:
-  Trace ID: real-agent-20260131-143015
-  Status: Sent to http://localhost:3000
-
-In Langfuse dashboard, you'll see:
-  - Root span: agent_run (with session ID and duration)
-  - Trace ID for cross-referencing with verification CLI
-  - (Child spans visibility depends on instrumentation configuration)
-
-
+**Key Features Demonstrated:**
 - ✅ Real LLM with tool invocation
 - ✅ Multi-turn agent interactions
 - ✅ Tool execution tracking
@@ -435,6 +462,8 @@ docker-compose up -d
 
 # View dashboard at http://localhost:3000
 ```
+
+**Note:** Current demos use in-memory counters (no database persistence). For production counter persistence, configure PostgreSQL via environment variables (see Configuration section).
 
 **What you'll see in Langfuse:**
 
@@ -611,22 +640,119 @@ See `src/crypto/verkle.py` for implementation details and trusted setup paramete
 
 ## 🔍 Verification CLI
 
-The **Verification CLI** provides public, third-party verification of agent run integrity without requiring server access. See detailed guide below for comprehensive documentation.
+The **Verification CLI** provides public, third-party verification of agent run integrity without requiring server access. It includes commands for listing workflows, retrieving metadata, and verifying integrity.
 
 ### Quick Start
 
 ```powershell
-# One-liner
-& .\venv\Scripts\Activate.ps1; python -m src.tools.verify_cli verify ./logs/run.json "CtF/sK3Mj93lu7eXLCOFqwlAOsTP..." --verbose
+# List all available workflows
+python -m src.tools.verify_cli list-workflows
 
-# Or step by step
-.\venv\Scripts\Activate.ps1
-python -m src.tools.verify_cli verify ./logs/run.json "CtF/sK3Mj93lu7eXLCOFqwlAOsTP..."
+# Get metadata for a specific workflow
+python -m src.tools.verify_cli get-workflow real-prompt-mcp-20260222-141751
+
+# Verify a workflow by session ID (fastest)
+python -m src.tools.verify_cli verify-by-id real-prompt-mcp-20260222-141751
+
+# Or verify by file path and root commitment
+python -m src.tools.verify_cli verify ./canonical_log.jsonl "AT32sZab0WmCTkJzukkIIuKyqm/j8188kvhFlpT2pqHFY3VNq/X0SlbBT0Ce9GvN" --verbose
 ```
 
-### Three Commands
+### Six Commands
 
-#### 1. **Verify** - Validate run integrity
+#### 1. **List-Workflows** - Show all available workflows
+```bash
+python -m src.tools.verify_cli list-workflows [--dir <path>]
+```
+
+Lists all workflows with basic metadata.
+
+**Example:**
+```bash
+python -m src.tools.verify_cli list-workflows
+```
+
+**Output:**
+```
+[WORKFLOWS] Available Workflows (5 total)
+
+Session ID                                         Timestamp                 Root                 Events
+-----------------------------------------------------------------------------------------------------------------------
+real-agent-mcp-20260220-161646                     2026-02-20T15:17:54       EmyfvcUc/Uci...     19
+real-prompt-mcp-20260222-141149                    2026-02-22T13:12:17       ClZxy9RVIccr...     2
+real-prompt-mcp-20260222-141751                    2026-02-22T13:18:10       AT32sZab0WmC...     2
+real-prompt-mcp-20260222-143944                    2026-02-22T13:40:09       DmBn8+/fBTI3...     2
+remote-agent-mcp-20260221-223427                   2026-02-21T21:34:52       GU8oGeJSxPfm...     4
+
+[NOTE] To verify a specific workflow:
+   verify-by-id <session-id>
+   get-workflow <session-id>
+```
+
+#### 2. **Get-Workflow** - Show detailed metadata for a specific workflow
+```bash
+python -m src.tools.verify_cli get-workflow <session-id> [--dir <path>]
+```
+
+Displays session ID, timestamp, session root, span roots, event count, event types, and file paths.
+
+**Example:**
+```bash
+python -m src.tools.verify_cli get-workflow real-prompt-mcp-20260222-141751
+```
+
+**Output:**
+```
+[WORKFLOW] Details: real-prompt-mcp-20260222-141751
+
+Metadata:
+  Timestamp: 2026-02-22T13:18:10.894176+00:00
+  Event Count: 2
+  Span Count: 3
+
+Cryptographic Commitments:
+  Session Root: AT32sZab0WmCTkJzukkIIuKyqm/j8188kvhFlpT2pqHFY3VNq/X0SlbBT0Ce9GvN
+
+Span Roots:
+  real-prompt-mcp-20260222-141751_agent_run_0: DABHke5IGpNS2IY1hrMnkTzHv0JrM4SWCzrVY...
+  real-prompt-mcp-20260222-141751_agent_turn_1_1: AoDmz3hXKzMX364Ar4k38S83ySBHPDFHrwb1q...
+  real-prompt-mcp-20260222-141751_agent_finalize_2: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA...
+
+Files:
+  Canonical Log: workflows\workflow_real-prompt-mcp-20260222-141751\canonical_log.jsonl
+  Metadata: workflows\workflow_real-prompt-mcp-20260222-141751\metadata.json
+  Commitments: workflows\workflow_real-prompt-mcp-20260222-141751\commitments.json
+
+Verification Commands:
+
+  Recommended (by session ID):
+    .\venv\Scripts\Activate.ps1; python -m src.tools.verify_cli verify-by-id real-prompt-mcp-20260222-141751
+
+  Alternative (by file path):
+    .\venv\Scripts\Activate.ps1; python -m src.tools.verify_cli verify "workflows\workflow_real-prompt-mcp-20260222-141751\canonical_log.jsonl" 'AT32sZab0WmCTkJzukkIIuKyqm/j8188kvhFlpT2pqHFY3VNq/X0SlbBT0Ce9GvN'
+```
+
+#### 3. **Verify-By-ID** - Verify a workflow by session ID (fastest)
+```bash
+python -m src.tools.verify_cli verify-by-id <session-id> [--dir <path>] [--verbose]
+```
+
+Reconstructs the Verkle tree and confirms the session root commitment matches the stored root.
+
+**Example:**
+```bash
+python -m src.tools.verify_cli verify-by-id real-prompt-mcp-20260222-141751 --verbose
+```
+
+**Output on success:**
+```
+[OK] Verification PASSED [OK]
+  Root matches: AT32sZab0WmCTkJzukkIIuKyqm/j8188kvhFlpT2pqHFY3VNq/X0SlbBT0Ce9GvN
+  Events verified: 2
+  Spans verified: 3
+```
+
+#### 4. **Verify** - Validate run integrity by file path and root
 ```bash
 python -m src.tools.verify_cli verify <log_file> <root_b64> [--expected-hash <hash>] [--verbose]
 ```
@@ -643,17 +769,17 @@ Reconstructs the Verkle tree and confirms the root commitment matches.
 
 **Example:**
 ```bash
-python -m src.tools.verify_cli verify ./logs/run.json "CtF/sK3Mj93lu7eXLCOFqwlAOsTP2jBKgeX1d5+TcUTgImYOO6ysBh9qncC6m/q5" --verbose
+python -m src.tools.verify_cli verify ./canonical_log.jsonl "AT32sZab0WmCTkJzukkIIuKyqm/j8188kvhFlpT2pqHFY3VNq/X0SlbBT0Ce9GvN" --verbose
 ```
 
 **Output on success:**
 ```
 [OK] Verification PASSED [OK]
-  Root matches: CtF/sK3Mj93lu7eX...
-  Events verified: 4
+  Root matches: AT32sZab0WmCTkJzukkIIuKyqm/j8188kvhFlpT2pqHFY3VNq/X0SlbBT0Ce9GvN
+  Events verified: 2
 ```
 
-#### 2. **Extract** - Show run metadata without verification
+#### 5. **Extract** - Show run metadata without verification
 ```bash
 python -m src.tools.verify_cli extract <log_file>
 ```
@@ -662,7 +788,7 @@ Displays session ID, event count, event types, timestamps, and log hash without 
 
 **Example:**
 ```bash
-python -m src.tools.verify_cli extract ./logs/run.json
+python -m src.tools.verify_cli extract ./canonical_log.jsonl
 ```
 
 **Output:**
@@ -671,26 +797,24 @@ python -m src.tools.verify_cli extract ./logs/run.json
 Canonical Log Metadata
 ============================================================
 
-Session ID:        test_session_1
-Event Count:       4
+Session ID:        real-prompt-mcp-20260222-141751
+Event Count:       2
 File Size:         641 bytes
 SHA-256 Hash:      d4fd76612a9b79bdc5ceac8b4378912d1ff235e816b88117bb87d2d7cf5c24a2
 
 Event Types:
-  agent_started.................................. 1 events
-  tool_call...................................... 1 events
-  llm_response................................... 1 events
-  agent_completed................................ 1 events
+  user_prompt....................................... 1 events
+  model_output...................................... 1 events
 
-First Timestamp:   2025-01-02T12:00:00.000Z
-Last Timestamp:    2025-01-02T12:00:03.000Z
+First Timestamp:   2026-02-22T13:17:55.000Z
+Last Timestamp:    2026-02-22T13:18:10.000Z
 
-Counter Range:     0 → 3
+Counter Range:     0 → 1
 
 ============================================================
 ```
 
-#### 3. **Export Proof** - Generate audit-ready proof JSON
+#### 6. **Export-Proof** - Generate audit-ready proof JSON
 ```bash
 python -m src.tools.verify_cli export-proof <log_file> <root_b64> [--output <path>] [--include-events] [--include-log]
 ```
@@ -708,7 +832,7 @@ Creates a JSON proof document containing verification results and metadata for a
 
 **Example:**
 ```bash
-python -m src.tools.verify_cli export-proof ./logs/run.json "CtF/sK3Mj93lu7eXLCOFqwlAOsTP2jBKgeX1d5+TcUTgImYOO6ysBh9qncC6m/q5" \
+python -m src.tools.verify_cli export-proof ./canonical_log.jsonl "AT32sZab0WmCTkJzukkIIuKyqm/j8188kvhFlpT2pqHFY3VNq/X0SlbBT0Ce9GvN" \
   --output proof.json \
   --include-events
 ```
@@ -717,28 +841,26 @@ python -m src.tools.verify_cli export-proof ./logs/run.json "CtF/sK3Mj93lu7eXLCO
 ```json
 {
   "version": "1.0",
-  "generated_at": "2025-01-02T14:30:45.123456",
+  "generated_at": "2026-02-22T13:30:45.123456",
   "metadata": {
-    "session_id": "agent_run_123",
-    "event_count": 4,
+    "session_id": "real-prompt-mcp-20260222-141751",
+    "event_count": 2,
     "file_size_bytes": 641,
-    "first_event_type": "agent_started",
-    "last_event_type": "agent_completed",
-    "first_timestamp": "2025-01-02T12:00:00.000Z",
-    "last_timestamp": "2025-01-02T12:00:03.000Z"
+    "first_event_type": "user_prompt",
+    "last_event_type": "model_output",
+    "first_timestamp": "2026-02-22T13:17:55.000Z",
+    "last_timestamp": "2026-02-22T13:18:10.000Z"
   },
   "verification": {
     "log_hash_sha256": "d4fd76612a9b79bdc5ceac8b4378912d1ff235e816b88117bb87d2d7cf5c24a2",
-    "expected_root_b64": "CtF/sK3Mj93lu7eXLCOFqwlAOsTP2jBKgeX1d5+TcUTgImYOO6ysBh9qncC6m/q5",
-    "computed_root_b64": "CtF/sK3Mj93lu7eXLCOFqwlAOsTP2jBKgeX1d5+TcUTgImYOO6ysBh9qncC6m/q5",
+    "expected_root_b64": "AT32sZab0WmCTkJzukkIIuKyqm/j8188kvhFlpT2pqHFY3VNq/X0SlbBT0Ce9GvN",
+    "computed_root_b64": "AT32sZab0WmCTkJzukkIIuKyqm/j8188kvhFlpT2pqHFY3VNq/X0SlbBT0Ce9GvN",
     "verification_passed": true,
-    "verification_timestamp": "2025-01-02T14:30:45.123456"
+    "verification_timestamp": "2026-02-22T13:30:45.123456"
   },
   "event_summary": {
-    "agent_started": 1,
-    "tool_call": 1,
-    "llm_response": 1,
-    "agent_completed": 1
+    "user_prompt": 1,
+    "model_output": 1
   }
 }
 ```
@@ -750,17 +872,10 @@ The CLI expects canonical logs in JSON format with the following structure:
 ```json
 [
   {
-    "session_id": "agent_run_123",
-    "event_type": "agent_started",
+    "session_id": "real-agent-<timestamp>",
+    "event_type": "user_prompt|model_output|tool_input|tool_output|...",
     "counter": 0,
-    "timestamp": "2025-01-02T12:00:00.000Z",
-    "data": { ... }
-  },
-  {
-    "session_id": "agent_run_123",
-    "event_type": "tool_call",
-    "counter": 1,
-    "timestamp": "2025-01-02T12:00:01.000Z",
+    "timestamp": "2026-02-22T13:17:55.000Z",
     "data": { ... }
   }
 ]
@@ -768,7 +883,7 @@ The CLI expects canonical logs in JSON format with the following structure:
 
 **Required Fields:**
 - `session_id` - Unique identifier for the agent run
-- `event_type` - Type of event (agent_started, tool_call, llm_response, etc.)
+- `event_type` - Type of event
 - `counter` - Sequential event counter (must be sequential starting from 0)
 - `timestamp` - ISO 8601 timestamp
 - `data` - Event-specific data
@@ -776,8 +891,9 @@ The CLI expects canonical logs in JSON format with the following structure:
 ### Use Cases
 
 - ✅ **Real-time verification** - Verify an agent run immediately after it completes
+- ✅ **Workflow browsing** - List and inspect all available workflows
+- ✅ **Batch verification** - Script-based verification of multiple runs using verify-by-id
 - ✅ **Audit trail** - Export proofs for compliance or security audits
-- ✅ **Batch verification** - Script-based verification of multiple runs
 - ✅ **Public transparency** - Share proofs to a verification server without server access
 - ✅ **Offline verification** - Download log and verify locally without network
 
@@ -815,9 +931,7 @@ The CLI performs the following verification steps:
 # GitHub Actions example
 - name: Verify Agent Run
   run: |
-    python -m src.tools.verify_cli verify logs/run.json "${{ secrets.EXPECTED_ROOT }}" \
-      --expected-hash "${{ secrets.EXPECTED_HASH }}" \
-      --verbose
+    python -m src.tools.verify_cli verify-by-id "${{ env.SESSION_ID }}" --verbose
 ```
 
 ### Testing
