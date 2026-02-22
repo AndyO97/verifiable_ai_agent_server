@@ -556,11 +556,15 @@ class AIAgent:
         # Start main span for entire agent execution
         main_span_id = self.integrity.start_span("agent_run")
         
+        # Get model name from LLM client if available
+        model_name = getattr(self.llm_client, 'model', 'unknown') if self.llm_client else 'unknown'
+        
         # Record initial prompt (inside agent_run span)
-        self.integrity.record_prompt(prompt)
+        self.integrity.record_prompt(prompt, metadata={"model": model_name})
         
         final_output = None
         turn_count = 0
+        last_usage = {}  # Track usage from last LLM response for cost/token reporting
         
         try:
             # Build tool schemas for LLM
@@ -587,6 +591,9 @@ class AIAgent:
                             prompt=conversation_history[-1]["content"],
                             tools=tool_schemas
                         )
+                    
+                    # Capture usage data for cost/token tracking
+                    last_usage = getattr(llm_response, 'usage', {}) or {}
                     
                     # Check if LLM wants to call tools
                     if not llm_response.has_tool_calls():
@@ -653,7 +660,13 @@ class AIAgent:
         
         # Record final output
         if final_output:
-            self.integrity.record_model_output(final_output)
+            output_metadata = {
+                "model": model_name,
+                "input_tokens": last_usage.get("input_tokens", 0),
+                "output_tokens": last_usage.get("output_tokens", 0),
+                "total_tokens": last_usage.get("total_tokens", 0),
+            }
+            self.integrity.record_model_output(final_output, metadata=output_metadata)
         
         # Start a final span to finalize all previous spans
         # This ensures the last turn span gets finalized

@@ -39,10 +39,14 @@ class LLMResponse:
         self,
         text: str,
         tool_calls: Optional[list[ToolCall]] = None,
-        stop_reason: str = "end_turn"
+        stop_reason: str = "end_turn",
+        usage: Optional[dict[str, Any]] = None
     ):
         self.text = text
         self.tool_calls = tool_calls or []
+        self.stop_reason = stop_reason
+        # Usage data from LLM API (tokens, costs if available)
+        self.usage = usage or {}
         self.stop_reason = stop_reason
     
     def has_tool_calls(self) -> bool:
@@ -366,6 +370,21 @@ class OpenRouterClient:
             
             response_text = response_data["choices"][0]["message"]["content"]
             
+            # Extract usage data from OpenRouter response
+            usage_data = {}
+            if "usage" in response_data:
+                raw_usage = response_data["usage"]
+                usage_data = {
+                    "input_tokens": raw_usage.get("prompt_tokens", 0),
+                    "output_tokens": raw_usage.get("completion_tokens", 0),
+                    "total_tokens": raw_usage.get("total_tokens", 0),
+                }
+                logger.debug(
+                    "openrouter_usage",
+                    input_tokens=usage_data["input_tokens"],
+                    output_tokens=usage_data["output_tokens"]
+                )
+            
             logger.info("openrouter_call_complete", response_len=len(response_text))
             
             # Parse tool calls if present
@@ -374,7 +393,8 @@ class OpenRouterClient:
             return LLMResponse(
                 text=response_text,
                 tool_calls=tool_calls,
-                stop_reason="end_turn"
+                stop_reason="end_turn",
+                usage=usage_data
             )
         
         except Exception as e:

@@ -140,7 +140,7 @@ def run_real_agent_workflow() -> None:
     print(f"{GREEN}[OK] MCP Protocol Handler initialized (version 2024-11){RESET}")
     print(f"{GREEN}[OK] MCPServer initialized{RESET}")
     print(f"{GREEN}[OK] HierarchicalVerkleMiddleware initialized{RESET}")
-    if integrity_middleware.langfuse_client and integrity_middleware.trace_id:
+    if integrity_middleware.langfuse_client:
         print(f"{GREEN}[OK] Langfuse tracing enabled (traces at http://localhost:3000){RESET}")
     else:
         print(f"{YELLOW}[INFO] Langfuse not available (optional - continuing without observability){RESET}")

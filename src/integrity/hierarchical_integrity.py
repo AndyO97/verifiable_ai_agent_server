@@ -1,19 +1,25 @@
 """
-Hierarchical Verkle Integrity Middleware with OpenTelemetry Support
+Hierarchical Verkle Integrity Middleware with Langfuse Observability
 
 Extends IntegrityMiddleware to support:
 - Span-based event organization
 - Per-span Verkle roots
 - Session-level Verkle root (combining span roots)
-- OpenTelemetry format export (OTel-compatible)
-- Dual storage (local canonical log + OTel export)
+- Integrated Langfuse observability (traces, generations, spans)
+- Dual storage (local canonical log + Langfuse observability)
 - Multi-level verification strategy
+
+Langfuse Hierarchy (handled internally):
+- Session: The overall workflow session (groups traces)
+- Trace: A single user request/interaction
+- Generation: An LLM API call (prompt -> response)
+- Span: A tool call or other operation
 """
 
 import hashlib
 import json
 import uuid
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional, Tuple, Dict
@@ -22,7 +28,7 @@ import structlog
 
 from src.integrity import IntegrityMiddleware, IntegrityEvent
 from src.crypto.verkle import VerkleAccumulator
-from src.crypto.encoding import CanonicalEncoder
+from src.observability.langfuse_client import LangfuseClient
 
 logger = structlog.get_logger(__name__)
 
@@ -55,17 +61,23 @@ class HierarchicalCommitments:
 
 class HierarchicalVerkleMiddleware(IntegrityMiddleware):
     """
-    Extended middleware with hierarchical Verkle support and OpenTelemetry export.
+    Extended middleware with hierarchical Verkle support and Langfuse observability.
     
     Architecture:
     - Each span gets its own Verkle accumulator and root
     - Session root is Verkle of all span roots
     - Events are associated with their span
     - Verification possible at span level or session level
+    
+    Langfuse Integration (handled internally):
+    - Creates traces for user interactions automatically
+    - Records generations for LLM calls
+    - Records spans for tool calls
+    - Callers don't need to interact with Langfuse directly
     """
     
     def __init__(self, session_id: Optional[str] = None):
-        """Initialize hierarchical middleware"""
+        """Initialize hierarchical middleware with Langfuse observability"""
         super().__init__(session_id)
         
         # Span management
@@ -83,7 +95,63 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
         # Track events by span
         self.events_by_span: Dict[str, list] = {}
         
-        logger.info("hierarchical_verkle_middleware_initialized", session_id=self.session_id)
+        # Track current LLM context for generation recording
+        self._current_prompt: Optional[str] = None
+        self._current_model: Optional[str] = None
+        
+        # Initialize Langfuse client (handles session -> trace -> generation hierarchy)
+        self._initialize_langfuse_client()
+        
+        logger.info(
+            "hierarchical_verkle_middleware_initialized",
+            session_id=self.session_id,
+            langfuse_enabled=self.langfuse_client is not None
+        )
+    
+    def _initialize_langfuse(self) -> None:
+        """Override parent's Langfuse init - we handle it ourselves in _initialize_langfuse_client"""
+        # Skip parent's Langfuse initialization - hierarchical middleware manages its own
+        pass
+    
+    def _initialize_langfuse_client(self) -> None:
+        """Initialize Langfuse client for observability"""
+        try:
+            import requests
+            response = requests.get("http://localhost:3000/api/public/health", timeout=1)
+            if response.status_code != 200:
+                logger.debug("langfuse_server_not_available")
+                self.langfuse_client = None
+                self.trace_id = None
+                return
+            
+            # Create Langfuse client with session_id (groups all traces together)
+            self.langfuse_client = LangfuseClient(self.session_id)
+            self.trace_id = None  # Will be created when first interaction starts
+            
+            logger.info("langfuse_client_initialized", session_id=self.session_id)
+        except Exception as e:
+            logger.debug("langfuse_initialization_failed", error=str(e))
+            self.langfuse_client = None
+            self.trace_id = None
+    
+    def _ensure_trace_exists(self, trace_name: str = "user_interaction", input_data: Optional[str] = None) -> Optional[str]:
+        """Ensure a Langfuse trace exists, creating one if needed"""
+        if not self.langfuse_client:
+            return None
+        
+        if not self.trace_id:
+            self.trace_id = self.langfuse_client.create_trace(
+                name=trace_name,
+                metadata={
+                    "protocol_version": "MCP-2024-11",
+                    "session_id": self.session_id,
+                    "middleware_type": "hierarchical_verkle",
+                    "cryptography": "KZG-BLS12-381",
+                },
+                input_data=input_data,
+            )
+        
+        return self.trace_id
     
     def start_span(self, span_name: str) -> str:
         """
@@ -102,8 +170,6 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
         # Create span ID that is:
         # 1. Deterministic within a session (uses counter, not UUID)
         # 2. Globally unique across sessions and server restarts (includes session_id)
-        # Format: {session_id}_{span_name}_{counter}
-        # This complies with MCP 2024-11 standards for unique span identification
         self.current_span_id = f"{self.session_id}_{span_name}_{self.span_counter}"
         self.span_counter += 1
         
@@ -122,6 +188,13 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
         )
         self.current_span_counter = 0  # Reset counter for new span
         
+        # Record span in Langfuse (only if trace exists - trace will be created in record_prompt)
+        if self.langfuse_client and self.trace_id:
+            self.langfuse_client.record_span(
+                name=f"span_{span_name}",
+                input_data={"span_id": self.current_span_id, "index": self.span_counter - 1}
+            )
+        
         logger.info("span_started", span_id=self.current_span_id, span_name=span_name)
         return self.current_span_id
     
@@ -129,9 +202,6 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
         """
         Finalize the current span (or specified span).
         
-        Args:
-            span_id: Optional span ID to finalize. If None, finalizes current span.
-            
         Returns:
             span_root: The Verkle root for the span (base64)
         """
@@ -140,9 +210,18 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
         return self._finalize_current_span()
     
     def record_prompt(self, prompt_text: str, metadata: dict[str, Any] | None = None) -> str:
-        """Override parent: Record prompt in current span (if active) and global accumulator"""
+        """
+        Record the initial user prompt.
+        
+        This stores the prompt for later pairing with the model output to create
+        a complete Langfuse generation.
+        """
         if self.finalized:
             raise RuntimeError("Cannot record events after finalization")
+        
+        # Store prompt for generation recording
+        self._current_prompt = prompt_text
+        self._current_model = (metadata or {}).get("model", "unknown")
         
         payload = {"prompt": prompt_text, **(metadata or {})}
         signer_id = "server"
@@ -174,23 +253,33 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
         
         self.counter += 1
         
-        # Log to Langfuse if available
-        if self.langfuse_client and self.trace_id:
-            self.langfuse_client.add_event_to_trace(
-                self.trace_id,
-                "user_prompt",
-                {"prompt": prompt_text, **(metadata or {})}
-            )
+        # Create or update trace in Langfuse with the prompt as input
+        if self.langfuse_client:
+            if not self.trace_id:
+                # Create trace with clean name and prompt as input
+                self._ensure_trace_exists("llm_request", input_data=prompt_text)
+            else:
+                # Update existing trace with prompt input
+                self.langfuse_client.update_trace(input_data=prompt_text)
         
         logger.info("prompt_recorded", session_id=self.session_id, counter=event.counter)
         return event.session_id
     
+    # Keys that are for Langfuse only (excluded from integrity payload to preserve commitments)
+    _LANGFUSE_ONLY_KEYS = {"input_tokens", "output_tokens", "total_tokens", "input_cost", "output_cost", "total_cost"}
+    
     def record_model_output(self, output_text: str, metadata: dict[str, Any] | None = None) -> None:
-        """Override parent: Record model output in current span (if active) and global accumulator"""
+        """
+        Record the LLM model output.
+        
+        This pairs with the previous prompt to create a complete Langfuse generation.
+        """
         if self.finalized:
             raise RuntimeError("Cannot record events after finalization")
         
-        payload = {"output": output_text, **(metadata or {})}
+        # Extract langfuse-only fields (excluded from integrity payload to preserve commitments)
+        integrity_metadata = {k: v for k, v in (metadata or {}).items() if k not in self._LANGFUSE_ONLY_KEYS}
+        payload = {"output": output_text, **integrity_metadata}
         signer_id = "server"
         signature = self._sign_payload(payload, signer_id)
         
@@ -206,7 +295,7 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
         
         event_dict = asdict(event)
         
-        # Add to flat accumulator (for flat root computation)
+        # Add to flat accumulator
         self.accumulator.add_event(event_dict)
         
         # Add to span accumulator if span is active
@@ -220,18 +309,43 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
         
         self.counter += 1
         
-        # Log to Langfuse if available
-        if self.langfuse_client and self.trace_id:
-            self.langfuse_client.add_event_to_trace(
-                self.trace_id,
-                "model_output",
-                {"output": output_text, **(metadata or {})}
+        # Record generation in Langfuse (combining prompt and response)
+        if self.langfuse_client and self._current_prompt:
+            model = (metadata or {}).get("model", self._current_model or "unknown")
+            input_tokens = (metadata or {}).get("input_tokens", 0)
+            output_tokens = (metadata or {}).get("output_tokens", 0)
+            input_cost = (metadata or {}).get("input_cost", 0.0)
+            output_cost = (metadata or {}).get("output_cost", 0.0)
+            total_cost = (metadata or {}).get("total_cost", 0.0)
+            
+            self.langfuse_client.record_generation(
+                name="llm_generation",
+                model=model,
+                prompt=self._current_prompt,
+                response=output_text,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                input_cost=input_cost,
+                output_cost=output_cost,
+                total_cost=total_cost,
+                metadata={
+                    "session_id": self.session_id,
+                    "span_id": self.current_span_id,
+                    "counter": self.counter - 1,
+                }
             )
+            
+            # Update trace output with the LLM response
+            response_preview = output_text[:200] + "..." if len(output_text) > 200 else output_text
+            self.langfuse_client.update_trace(output=response_preview)
+            
+            # Clear prompt after recording
+            self._current_prompt = None
         
         logger.info("model_output_recorded", session_id=self.session_id, counter=event.counter)
     
     def record_tool_input(self, tool_name: str, input_args: dict[str, Any]) -> None:
-        """Override parent: Record tool input in current span (if active) and global accumulator"""
+        """Record tool invocation input"""
         if self.finalized:
             raise RuntimeError("Cannot record events after finalization")
         
@@ -250,11 +364,8 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
         )
         
         event_dict = asdict(event)
-        
-        # Add to flat accumulator (for flat root computation)
         self.accumulator.add_event(event_dict)
         
-        # Add to span accumulator if span is active
         if self.current_span_id and self.current_span_accumulator:
             span_event_dict = asdict(event)
             span_event_dict["span_id"] = self.current_span_id
@@ -265,18 +376,18 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
         
         self.counter += 1
         
-        # Log to Langfuse if available
+        # Record in Langfuse (only if trace exists)
         if self.langfuse_client and self.trace_id:
-            self.langfuse_client.add_event_to_trace(
-                self.trace_id,
-                "tool_input",
-                {"tool_name": tool_name, "input": input_args}
+            self.langfuse_client.record_span(
+                name=f"tool_{tool_name}",
+                input_data=input_args,
+                metadata={"tool_name": tool_name}
             )
         
         logger.info("tool_input_recorded", session_id=self.session_id, counter=event.counter, tool=tool_name)
     
     def record_tool_output(self, tool_name: str, output: Any) -> None:
-        """Override parent: Record tool output in current span (if active) and global accumulator"""
+        """Record tool invocation output"""
         if self.finalized:
             raise RuntimeError("Cannot record events after finalization")
         
@@ -295,11 +406,8 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
         )
         
         event_dict = asdict(event)
-        
-        # Add to flat accumulator (for flat root computation)
         self.accumulator.add_event(event_dict)
         
-        # Add to span accumulator if span is active
         if self.current_span_id and self.current_span_accumulator:
             span_event_dict = asdict(event)
             span_event_dict["span_id"] = self.current_span_id
@@ -310,14 +418,6 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
         
         self.counter += 1
         
-        # Log to Langfuse if available
-        if self.langfuse_client and self.trace_id:
-            self.langfuse_client.add_event_to_trace(
-                self.trace_id,
-                "tool_output",
-                {"tool_name": tool_name, "output": output}
-            )
-        
         logger.info("tool_output_recorded", session_id=self.session_id, counter=event.counter, tool=tool_name)
     
     def record_event_in_span(
@@ -326,27 +426,15 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
         payload: dict[str, Any],
         signer_id: str = "server"
     ) -> str:
-        """
-        Record an event within the current span.
-        
-        Args:
-            event_type: Type of event (prompt, model_output, tool_input, tool_output, etc.)
-            payload: Event payload
-            signer_id: Who signed this (server or tool name)
-            
-        Returns:
-            event_counter: The counter for this event
-        """
+        """Record an event within the current span"""
         if not self.current_span_id:
             raise RuntimeError("No active span. Call start_span() first.")
         
         if self.finalized:
             raise RuntimeError("Cannot record events after finalization")
         
-        # Sign payload
         signature = self._sign_payload(payload, signer_id)
         
-        # Create event
         event = IntegrityEvent(
             session_id=self.session_id,
             counter=self.counter,
@@ -360,40 +448,30 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
         event_dict = asdict(event)
         event_dict["span_id"] = self.current_span_id
         
-        # Add to session accumulator with global counter
-        self.accumulator.add_event(event_dict)  # Session-level (redundancy)
+        self.accumulator.add_event(event_dict)
         
-        # Create span version with local counter for per-span root
         span_event_dict = asdict(event)
         span_event_dict["span_id"] = self.current_span_id
-        span_event_dict["counter"] = self.current_span_counter  # Use span's local counter
-        self.current_span_accumulator.add_event(span_event_dict)  # Span-level (for per-span root)
+        span_event_dict["counter"] = self.current_span_counter
+        self.current_span_accumulator.add_event(span_event_dict)
         
-        # Track in span
         self.events_by_span[self.current_span_id].append(event_dict)
         
         self.counter += 1
-        self.current_span_counter += 1  # Increment span-local counter
+        self.current_span_counter += 1
         
         return str(self.counter - 1)
     
     def _finalize_current_span(self) -> str:
-        """
-        Finalize the current span and compute its Verkle root.
-        
-        Returns:
-            span_root: The Verkle root for this span (base64)
-        """
+        """Finalize the current span and compute its Verkle root"""
         if not self.current_span_id:
             return None
         
         span = self.spans[self.current_span_id]
         
-        # Finalize span accumulator
         self.current_span_accumulator.finalize()
         span_root = self.current_span_accumulator.get_root_b64()
         
-        # Store span root
         span.end_time = self._get_server_timestamp()
         span.end_index = self.counter - 1
         span.event_count = len(self.events_by_span[self.current_span_id])
@@ -403,13 +481,10 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
              datetime.fromisoformat(span.start_time)).total_seconds() * 1000
         )
         
-        # Add span root to session accumulator as a synthetic event
-        # This ensures session root is a function of all span roots
-        # NOTE: We do NOT include timestamp here to make verification deterministic
-        # The span's actual end time is already recorded in span metadata
+        # Add span root to session accumulator
         span_commitment_event = {
             "session_id": self.session_id,
-            "counter": self.session_accumulator_counter,  # Session accumulator counter
+            "counter": self.session_accumulator_counter,
             "event_type": "span_commitment",
             "span_id": self.current_span_id,
             "span_name": span.name,
@@ -417,7 +492,7 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
             "event_count": span.event_count,
         }
         self.session_accumulator.add_event(span_commitment_event)
-        self.session_accumulator_counter += 1  # Increment session counter
+        self.session_accumulator_counter += 1
         self.span_roots[self.current_span_id] = span_root
         
         logger.info(
@@ -443,16 +518,14 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
         if self.current_span_id:
             self._finalize_current_span()
         
-        # Finalize event accumulator (all raw events)
+        # Finalize accumulators
         self.accumulator.finalize()
         event_accumulator_root = self.accumulator.get_root_b64()
         
-        # Finalize session-level (all span roots)
         self.session_accumulator.finalize()
         session_root = self.session_accumulator.get_root_b64()
         
-        # Get canonical log from session accumulator (includes synthetic span_commitment events)
-        # This ensures verification can recompute the session root from the saved log
+        # Get canonical log
         canonical_log = self.session_accumulator.get_canonical_log()
         if isinstance(canonical_log, str):
             canonical_log_bytes = canonical_log.encode('utf-8')
@@ -461,7 +534,6 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
         
         log_hash = hashlib.sha256(canonical_log_bytes).hexdigest()
         
-        # Build commitments structure
         commitments = HierarchicalCommitments(
             session_root=session_root,
             event_accumulator_root=event_accumulator_root,
@@ -472,22 +544,39 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
             otel_compliant=True
         )
         
-        # Finalize Langfuse if available
+        # Finalize Langfuse trace
         if self.langfuse_client and self.trace_id:
             try:
-                self.langfuse_client.add_event_to_trace(
-                    self.trace_id,
-                    "commitment_finalized",
-                    {
+                # Record final verification event
+                self.langfuse_client.record_event(
+                    name="verification_complete",
+                    data={
                         "session_root": session_root,
                         "span_count": len(self.spans),
-                        "span_roots": self.span_roots,
-                        "canonical_log_hash": log_hash,
                         "event_count": self.counter,
-                        "verification_ready": True
+                        "verified": True
                     }
                 )
-                self.langfuse_client.finalize_trace(self.trace_id)
+                
+                # Add verification score
+                self.langfuse_client.add_score(
+                    name="verification_status",
+                    value=1.0,
+                    comment="Cryptographically verified"
+                )
+                
+                # Update trace with final output and FLUSH to Langfuse
+                self.langfuse_client.update_trace(
+                    output=f"Session verified. Root: {session_root[:32]}...",
+                    metadata={
+                        "session_root": session_root,
+                        "span_count": len(self.spans),
+                        "event_count": self.counter,
+                        "canonical_log_hash": log_hash,
+                    },
+                    tags=["verified", "finalized"],
+                    flush=True  # Send all accumulated trace data now
+                )
             except Exception as e:
                 logger.warning("langfuse_finalize_failed", error=str(e))
         
@@ -504,42 +593,28 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
         return (session_root, commitments, canonical_log_bytes)
     
     def export_to_otel_format(self) -> dict:
-        """
-        Export spans to OpenTelemetry format.
-        
-        Returns:
-            dict: OpenTelemetry-compatible trace structure
-        """
+        """Export spans to OpenTelemetry format"""
         trace_id = self.trace_id or f"trace-{uuid.uuid4().hex[:12]}"
         
         otel_spans = []
         for span_id, span_meta in self.spans.items():
-            # Convert ISO timestamps to milliseconds since epoch
-            start_ms = int(
-                datetime.fromisoformat(span_meta.start_time).timestamp() * 1000
-            )
-            end_ms = int(
-                datetime.fromisoformat(span_meta.end_time).timestamp() * 1000
-            ) if span_meta.end_time else start_ms
+            start_ms = int(datetime.fromisoformat(span_meta.start_time).timestamp() * 1000)
+            end_ms = int(datetime.fromisoformat(span_meta.end_time).timestamp() * 1000) if span_meta.end_time else start_ms
             
             otel_span = {
                 "traceId": trace_id,
                 "spanId": span_id,
-                "parentSpanId": None,  # All spans are top-level for now
+                "parentSpanId": None,
                 "name": span_meta.name,
-                "startTime": start_ms * 1_000_000,  # Convert to nanoseconds
+                "startTime": start_ms * 1_000_000,
                 "endTime": end_ms * 1_000_000,
                 "durationMillis": span_meta.duration_ms,
-                "status": {
-                    "code": "OK",
-                    "description": ""
-                },
+                "status": {"code": "OK", "description": ""},
                 "attributes": {
                     "local_verkle_root": span_meta.verkle_root,
                     "event_indices": f"{span_meta.start_index}-{span_meta.end_index}",
                     "event_count": span_meta.event_count,
                     "session_id": self.session_id,
-                    "span_index": list(self.spans.keys()).index(span_id),
                 }
             }
             otel_spans.append(otel_span)
@@ -547,12 +622,8 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
         return {
             "traceId": trace_id,
             "name": "verifiable_ai_workflow",
-            "startTime": int(
-                datetime.fromisoformat(self.spans[list(self.spans.keys())[0]].start_time).timestamp() * 1000 * 1_000_000
-            ) if self.spans else 0,
-            "endTime": int(
-                datetime.fromisoformat(self.spans[list(self.spans.keys())[-1]].end_time).timestamp() * 1000 * 1_000_000
-            ) if self.spans else 0,
+            "startTime": int(datetime.fromisoformat(self.spans[list(self.spans.keys())[0]].start_time).timestamp() * 1000 * 1_000_000) if self.spans else 0,
+            "endTime": int(datetime.fromisoformat(self.spans[list(self.spans.keys())[-1]].end_time).timestamp() * 1000 * 1_000_000) if self.spans else 0,
             "spans": otel_spans,
             "metadata": {
                 "integrity": {
@@ -561,26 +632,16 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
                     "canonical_log_hash": hashlib.sha256(self.accumulator.get_canonical_log()).hexdigest(),
                     "event_count": self.counter,
                     "verification_ready": True,
-                    "otel_compliant": True,
                     "session_id": self.session_id,
                 }
             }
         }
     
     def save_to_local_storage(self, base_dir: Path) -> dict:
-        """
-        Save all data to local storage with hierarchical structure.
-        
-        Args:
-            base_dir: Base directory for storage (e.g., Path("workflow_abc123"))
-            
-        Returns:
-            dict: Summary of saved files and metadata
-        """
+        """Save all data to local storage with hierarchical structure"""
         base_dir.mkdir(parents=True, exist_ok=True)
         
-        # 1. Save canonical log from session accumulator (includes span commitments)
-        # This matches the canonical log used to compute the session root
+        # Save canonical log
         canonical_log = self.session_accumulator.get_canonical_log()
         log_path = base_dir / "canonical_log.jsonl"
         if isinstance(canonical_log, bytes):
@@ -588,15 +649,12 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
         else:
             log_path.write_text(canonical_log)
         
-        # 2. Save spans structure
-        spans_data = {}
-        for span_id, span_meta in self.spans.items():
-            spans_data[span_id] = asdict(span_meta)
-        
+        # Save spans structure
+        spans_data = {span_id: asdict(span_meta) for span_id, span_meta in self.spans.items()}
         spans_path = base_dir / "spans_structure.json"
         spans_path.write_text(json.dumps(spans_data, indent=2))
         
-        # 3. Save commitments
+        # Save commitments
         commitments_path = base_dir / "commitments.json"
         commitments_data = {
             "session_root": self.session_accumulator.get_root_b64() if self.finalized else None,
@@ -604,7 +662,7 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
         }
         commitments_path.write_text(json.dumps(commitments_data, indent=2))
         
-        # 4. Save metadata
+        # Save metadata
         metadata_path = base_dir / "metadata.json"
         metadata = {
             "session_id": self.session_id,
@@ -616,21 +674,13 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
                 if isinstance(self.session_accumulator.get_canonical_log(), bytes)
                 else self.session_accumulator.get_canonical_log().encode('utf-8')
             ).hexdigest(),
-            "canonical_log_file": "canonical_log.jsonl",
-            "spans_file": "spans_structure.json",
-            "commitments_file": "commitments.json",
-            "otel_export_file": "otel_export.json",
         }
         metadata_path.write_text(json.dumps(metadata, indent=2))
         
-        # 5. Save OTel export
+        # Save OTel export
         otel_export = self.export_to_otel_format()
         otel_path = base_dir / "otel_export.json"
         otel_path.write_text(json.dumps(otel_export, indent=2))
-        
-        # 6. Save recovery instructions
-        recovery_path = base_dir / "RECOVERY.md"
-        recovery_path.write_text(self._generate_recovery_instructions(base_dir))
         
         result = {
             "base_dir": str(base_dir),
@@ -639,66 +689,7 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
             "commitments": str(commitments_path),
             "metadata": str(metadata_path),
             "otel_export": str(otel_path),
-            "recovery_instructions": str(recovery_path),
-            "session_root": self.session_accumulator.get_root_b64() if not self.finalized else None,
         }
         
         logger.info("local_storage_saved", **result)
         return result
-    
-    def _generate_recovery_instructions(self, base_dir: Path) -> str:
-        """Generate recovery instructions for accessing local proof"""
-        session_root = self.session_accumulator.get_root_b64()
-        
-        return f"""# Recovery Instructions
-
-## Overview
-This directory contains cryptographically verifiable proof of an AI agent workflow.
-
-## Files
-- `canonical_log.jsonl`: All raw events (source of truth)
-- `spans_structure.json`: OpenTelemetry span layout
-- `commitments.json`: Verkle roots for verification
-- `metadata.json`: Session metadata
-- `otel_export.json`: OpenTelemetry format (for any OTel UI)
-
-## Verification Levels
-
-### Level 1: Quick Check (Instant)
-```bash
-python verify_cli check metadata {base_dir}/metadata.json
-```
-
-### Level 2: Local Verification (Complete)
-```bash
-python verify_cli verify local {base_dir} '{session_root}'
-```
-
-### Level 3: Deep Verification (Reconstructs Merkle)
-```bash
-python verify_cli verify --deep local {base_dir} '{session_root}'
-```
-
-### Level 4: Cross-Verify with OTel UI (If Langfuse exists)
-```bash
-python verify_cli verify --compare-otel local {base_dir} langfuse:trace-xxx
-```
-
-## Recovery from Data Loss
-
-If Langfuse is deleted or unavailable:
-1. You still have all events in `canonical_log.jsonl`
-2. You have all span structure in `spans_structure.json`
-3. You have cryptographic commitments in `commitments.json`
-4. Run Level 3 verification to prove everything matches
-
-## Support
-For questions about verification, see:
-- README.md in the project root
-- verify_cli --help
-- src/tools/verify_cli.py
-
-Generated: {datetime.now(timezone.utc).isoformat()}
-Session ID: {self.session_id}
-Session Root: {session_root}
-"""

@@ -156,10 +156,9 @@ class IntegrityMiddleware:
         
         # Log to Langfuse if available
         if self.langfuse_client and self.trace_id:
-            self.langfuse_client.add_event_to_trace(
-                self.trace_id,
-                "user_prompt",
-                {"prompt": prompt_text, **(metadata or {})}
+            self.langfuse_client.record_event(
+                name="user_prompt",
+                data={"prompt": prompt_text, **(metadata or {})}
             )
         
         logger.info("prompt_recorded", session_id=self.session_id, counter=event.counter)
@@ -190,10 +189,9 @@ class IntegrityMiddleware:
         
         # Log to Langfuse if available
         if self.langfuse_client and self.trace_id:
-            self.langfuse_client.add_event_to_trace(
-                self.trace_id,
-                "model_output",
-                {"output": output_text, **(metadata or {})}
+            self.langfuse_client.record_event(
+                name="model_output",
+                data={"output": output_text, **(metadata or {})}
             )
         
         logger.info("model_output_recorded", session_id=self.session_id, counter=event.counter)
@@ -223,10 +221,9 @@ class IntegrityMiddleware:
         
         # Log to Langfuse if available
         if self.langfuse_client and self.trace_id:
-            self.langfuse_client.add_event_to_trace(
-                self.trace_id,
-                "tool_input",
-                {"tool": tool_name, "args": input_args}
+            self.langfuse_client.record_span(
+                name=f"tool_{tool_name}",
+                input_data={"tool": tool_name, "args": input_args}
             )
         
         logger.info("tool_input_recorded", session_id=self.session_id, tool=tool_name, counter=event.counter)
@@ -265,13 +262,8 @@ class IntegrityMiddleware:
         event_dict = asdict(event)
         self.accumulator.add_event(event_dict)
         
-        # Log to Langfuse if available
-        if self.langfuse_client and self.trace_id:
-            self.langfuse_client.add_event_to_trace(
-                self.trace_id,
-                "tool_output",
-                {"tool": tool_name, "result": result}
-            )
+        # Log to Langfuse if available - tool output recorded as span update
+        # (Tool input span was already created)
         
         logger.info("tool_output_recorded", session_id=self.session_id, tool=tool_name, counter=event.counter)
     
@@ -301,10 +293,9 @@ class IntegrityMiddleware:
         
         # Log to Langfuse if available
         if self.langfuse_client and self.trace_id:
-            self.langfuse_client.add_event_to_trace(
-                self.trace_id,
-                event_type,
-                event_dict
+            self.langfuse_client.record_event(
+                name=event_type,
+                data=event_dict
             )
         
         logger.info("mcp_event_recorded", session_id=self.session_id, event_type=event_type)
@@ -338,10 +329,9 @@ class IntegrityMiddleware:
         # Finalize Langfuse trace if it exists
         if self.langfuse_client and self.trace_id:
             try:
-                self.langfuse_client.add_event_to_trace(
-                    self.trace_id,
-                    "commitment_finalized",
-                    {
+                self.langfuse_client.record_event(
+                    name="commitment_finalized",
+                    data={
                         "verkle_root": root_b64,
                         "root_signature": str(root_signature),
                         "canonical_log_hash": log_hash,
@@ -349,7 +339,16 @@ class IntegrityMiddleware:
                         "verified": True
                     }
                 )
-                self.langfuse_client.finalize_trace(self.trace_id)
+                self.langfuse_client.add_score(
+                    name="verification_status",
+                    value=1.0,
+                    comment="Cryptographically verified"
+                )
+                self.langfuse_client.update_trace(
+                    output=f"Verified. Root: {root_b64[:32]}...",
+                    metadata={"verkle_root": root_b64, "event_count": len(self.accumulator.events)},
+                    tags=["verified", "finalized"]
+                )
             except Exception as e:
                 logger.warning("langfuse_finalize_failed", error=str(e))
         

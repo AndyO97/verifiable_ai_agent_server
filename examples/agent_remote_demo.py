@@ -83,7 +83,7 @@ async def main():
     jsonrpc_messages: list[dict[str, Any]] = []
     
     print(f"{GREEN}[OK] IntegrityMiddleware initialized (unified accumulator + Langfuse){RESET}")
-    if middleware.langfuse_client and middleware.trace_id:
+    if middleware.langfuse_client:
         print(f"{GREEN}[OK] Langfuse tracing enabled (traces at http://localhost:3000){RESET}")
     else:
         print(f"{YELLOW}[INFO] Langfuse not available (optional - continuing without observability){RESET}")
