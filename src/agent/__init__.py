@@ -595,6 +595,17 @@ class AIAgent:
                     # Capture usage data for cost/token tracking
                     last_usage = getattr(llm_response, 'usage', {}) or {}
                     
+                    # Record LLM generation for observability (Langfuse only - no integrity impact)
+                    self.integrity.record_llm_generation(
+                        prompt=conversation_history[-1]["content"],
+                        response=llm_response.text,
+                        model=model_name,
+                        name=f"llm_call_turn_{turn_count}",
+                        input_tokens=last_usage.get("input_tokens", 0),
+                        output_tokens=last_usage.get("output_tokens", 0),
+                        turn=turn_count,
+                    )
+                    
                     # Check if LLM wants to call tools
                     if not llm_response.has_tool_calls():
                         # No more tool calls - this is the final output
