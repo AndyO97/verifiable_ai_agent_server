@@ -4,12 +4,10 @@ A high-integrity, self-hosted AI Agent Server built on the Model Context Protoco
 
 ## 📋 Latest Updates (February 21, 2026)
 
-- **Windows Compatibility Fixed**: All emoji characters replaced with ASCII-safe alternatives ([OK], [ERROR], [WORKFLOWS]) for cp1252 encoding compatibility
 - **Demo Commands Improved**: All verification commands now include `.\\venv\\Scripts\\Activate.ps1` prefix for copy-paste readiness
 - **Root Type Corrected**: Manual verification commands now use correct `session_root` for canonical_log.jsonl (span_commitment events)
 - **Agent Response Completeness**: Increased `max_turns` from 3-5 to 8 for complete multi-turn interactions
 - **Remote Tool Feedback**: Added startup status messages ([STARTING], [WAITING], [STOPPED])
-- **Code Cleanup**: Removed obsolete debug files (check_log.py, check_events.py, demo.txt, demo_output.txt)
 
 ## 🎯 Core Features
 
@@ -129,6 +127,7 @@ The project supports two LLM providers. Choose one:
 2. Edit `.env` file:
    ```bash
    OPENROUTER_API_KEY=sk-or-YOUR_API_KEY_HERE
+   OPENROUTER_MODEL=LLM_MODEL_HERE
    ```
 3. Run validation:
    ```powershell
@@ -142,7 +141,8 @@ real_agent_demo.py           # Demo: Multi-tool agent with tool invocation
 run_all_tests.py             # Run all tests with progress tracking
 pyproject.toml               # uv/pip compatible dependencies
 setup.ps1                    # Automated setup script (Windows)
-examples/ibs_demo.py         # Demo: Identity-Based Signatures (IBS)
+examples/agent_remote_demo.py# Demo: Secure remote tool invocation
+examples/remote_tool.py      # Remote tool used in the agent_remote_demo.py 
 docker-compose.yml           # Langfuse self-hosted deployment
 README.md                    # This file (comprehensive guide)
 PROJECT_SUMMARY.md           # Project status & future work
@@ -154,6 +154,7 @@ OLLAMA_SETUP_GUIDE.txt       # Alternative LLM provider guide
 **Key Files:**
 - `real_prompt_demo.py` - Entry point for simple demo with Langfuse tracing
 - `real_agent_demo.py` - Entry point for agent demo with tool invocation
+- `examples/agent_remote_demo.py` - Entry point for agent demo with remote tool invocation
 - `run_all_tests.py` - Run all tests with progress tracking
 - `.env` - Local configuration (credentials, API keys, not in git)
 - `docker-compose.yml` - Langfuse deployment (optional observability)
@@ -162,8 +163,85 @@ OLLAMA_SETUP_GUIDE.txt       # Alternative LLM provider guide
 - `README.md` - Primary user guide (you are here)
 - `PROJECT_SUMMARY.md` - Project status and future considerations
 - `PROPOSAL.md` - Technical approach and architecture decisions
-- `LANGFUSE_SETUP_GUIDE.md` - Observability setup and usage
 - `OLLAMA_SETUP_GUIDE.txt` - Alternative LLM configuration
+
+---
+
+## 🔒 Security
+
+### Tool Authorization
+
+The security middleware enforces a whitelist of authorized tools:
+
+```python
+security = SecurityMiddleware()
+security.register_authorized_tools(["calculator", "search"])
+
+# Unauthorized attempts are:
+# - Logged as security_event
+# - Blocked with neutral response
+# - Tool capability map NOT exposed to model
+```
+
+### Replay Resistance
+
+Prevents tampering through:
+1. **Session ID**: Unique per run
+2. **Monotonic Counter**: Atomic increment, persisted
+3. **Server Timestamp**: From trusted NTP-synced clock
+4. **Canonical Encoding**: Deterministic serialization
+
+---
+
+## 📚 Key Modules
+
+### `src/crypto/encoding.py`
+RFC 8785 canonical JSON encoder with deterministic serialization and support for event normalization.
+
+### `src/crypto/verkle.py`
+Verkle tree accumulator using KZG commitments over BLS12-381 elliptic curve. Produces tamper-proof root commitments.
+
+### `src/integrity/hierarchical_integrity.py` (Hierarchical Verkle)
+**HierarchicalVerkleMiddleware**: Extends IntegrityMiddleware with span-based event organization
+- OpenTelemetry-compatible span management (mcp_initialize, user_interaction, tool_execution, final_response)
+- Per-span Verkle roots with independent accumulators
+- Session-level root combining all span roots
+- Methods: `start_span()`, `record_event_in_span()`, `finalize()`, `save_to_local_storage()`, `export_to_otel_format()`
+- Automatic Langfuse integration with graceful fallback
+- Returns tuple from `finalize()`: `(session_root, HierarchicalCommitments, canonical_log_bytes)`
+- Local storage: Saves complete hierarchical structure to disk (6 files per run)
+- Tool signatures preserved: IBS signatures on tool outputs still recorded and verifiable
+
+### `src/transport/jsonrpc_protocol.py` (New)
+JSON-RPC 2.0 protocol implementation with MCP 2024-11 compliance:
+- Standard protocol versioning
+- Request/response correlation with IDs
+- Initialization handshake
+- Error codes per JSON-RPC 2.0 specification
+- Batch request support
+
+### `src/transport/mcp_protocol_adapter.py` (New)
+Adapter bridging MCPServer with JSON-RPC 2.0 protocol layer. Handles method routing and MCP specification compliance.
+
+### `src/agent/__init__.py` (Enhanced)
+MCP server runtime with:
+- Tool definition, registration, and invocation
+- Resource management (files, audit logs)
+- Prompt templates with argument rendering
+- Server capabilities advertisement
+- Notification system for event subscription
+
+### `src/security/__init__.py`
+Authorization manager and security middleware for threat prevention. Tool whitelist enforcement.
+
+### `src/observability/__init__.py`
+OTel tracing and Langfuse integration. Automatic OTel span export when Langfuse is configured.
+
+### `src/storage/__init__.py`
+Artifact and log storage management.
+
+### `src/tools/verify_cli.py`
+Public verification CLI for independent run validation. Three commands: `verify`, `extract`, `export-proof`.
 
 ---
 
@@ -285,15 +363,19 @@ What This Proves:
 - ✅ SHA-256 hashing of events
 - ✅ KZG commitments on BLS12-381 elliptic curve
 - ✅ Cryptographic proof of integrity
-- ✅ Complete audit trail in `real_workflow.jsonl`
+- ✅ Complete audit trail in `workflows/workflow_{session_id}/` (find by session ID)
 - ✅ **Automatic Langfuse integration** - Traces sent to Langfuse dashboard (if running)
 
 **Langfuse Integration:**
 The demo automatically exports OpenTelemetry spans to Langfuse if configured. In your Langfuse dashboard, you'll see:
-- Root span with session tracking
-- Event sequence with timestamps
-- Complete trace for debugging and auditing
-- (Detailed child spans depend on instrumentation configuration)
+- **Session**: Groups the entire agent run (useful for organizing multiple traces)
+- **Trace**: The main Q&A interaction with complete metadata
+- **Generation**: LLM call with prompt, response, and cost breakdown
+  - Per-turn visibility: One generation per LLM turn (created during agent execution)
+  - Token usage: Input/output token counts from OpenRouter
+  - Cost tracking: Input/output costs in USD with automatic aggregation
+- Span hierarchy with timestamps and duration metrics
+- Complete event sequence for debugging and auditing
 
 ---
 
@@ -414,46 +496,144 @@ What This Proves:
 - ✅ Real LLM with tool invocation
 - ✅ Multi-turn agent interactions
 - ✅ Tool execution tracking
-- ✅ Complete decision audit trail
+- ✅ Complete decision audit trail in `workflows/workflow_{session_id}/`
 - ✅ Cryptographic proof of tool outputs
 - ✅ Non-repudiation (LLM can't deny what it asked for)
-- ✅ **Automatic Langfuse integration** - Complete trace of all tool calls and LLM decisions
+- ✅ **Automatic Langfuse integration** - Complete trace of all tool calls and LLM decisions (find workflow by session ID)
 
 **Langfuse Integration:**
 The agent demo automatically exports detailed traces to Langfuse showing:
+- **Session**: Groups all traces for the agent session
+- **Trace**: The main agent execution flow with metadata
+- **Generations**: One per LLM turn (multi-turn support)
+  - Per-turn visibility: See each LLM decision and reasoning
+  - Token usage: Input/output tokens tracked per turn
+  - Cost breakdown: USD costs per LLM call with automatic aggregation
+  - Model selection: Shows which model was used for each turn
 - LLM decision points and tool selections
 - Each tool invocation with parameters and results
-- Multi-turn interaction flow
-- Token usage and latency for each LLM call
-- Cost breakdown per tool and model call
+- Multi-turn interaction flow with latency breakdown
+- Complete audit trail for debugging and compliance
+
+---
+
+### Demo 3: Secure Remote Tool Agent - ECDH-AES256-GCM + IBS Signatures
+
+**What it shows:** Agent with encrypted remote tool access, split between secure client and server processes
+
+```powershell
+# Terminal 1 - Start remote tool (WebSocket server)
+.\venv\Scripts\Activate.ps1
+python examples/remote_tool.py
+
+# Terminal 2 - Run secure agent (connects to remote tool)
+.\venv\Scripts\Activate.ps1
+python examples/agent_remote_demo.py
+```
+
+**What's unique:** This demo proves **secure remote tool invocation across process/network boundaries**:
+- **ECDH-AES256-GCM Encryption**: Client and remote tool exchange Diffie-Hellman keys, establish shared secret, encrypt all messages
+- **IBS Key Provisioning**: During handshake, remote tool receives Identity-Based Signature keys derived from its name (BLS12-381)
+- **Signed Tool Responses**: Tool outputs cryptographically signed by the remote tool (not the client), proving authenticity
+- **Secure Channel Integrity**: All remote tool messages tracked in integrity log (canonical encoding + Verkle commitment)
+- **Replay Prevention**: Session IDs and monotonic counters prevent unauthorized message replay
+
+**What you'll see:**
+
+```
+[OK] IntegrityMiddleware initialized (unified accumulator + Langfuse)
+[OK] Langfuse tracing enabled (traces at http://localhost:3000)
+Session ID: remote-agent-mcp-20260223-120530
+
+[Conn] Connected to 'remote_calc' on ws://localhost:5555 (Secure Channel Established)
+[OK] ECDH-AES256-GCM secure channel established
+[OK] IBS key provisioning complete
+
+[OK] Remote tool registered with MCPServer
+[OK] OpenRouterClient initialized (model: arcee-ai/trinity-large-preview:free)
+[OK] AIAgent initialized with remote tools
+
+User Request: I need you to help me perform a calculation using the remote tool...
+
+LLM Decision: Tool calls needed
+
+[TOOL_CALL] remote_calc('2048 + 512 - 256')
+  [Encrypted] Message sent to remote tool
+  [Verified] Tool signature valid (IBS-BLS12-381)
+  → Result received and recorded
+
+[OK] Agent execution completed with 2 turn(s)
+
+Cryptographic Commitment:
+  Session Root: ECUu4fr//g4ZPLX65PFfWPGgYeLail+ViFCK6VsW1WUmuwce842m/PI1mfXWpuRB
+
+Hierarchical Span Structure:
+  - remote-agent-mcp-20260223-120530_agent_run_0: 1 events
+  - remote-agent-mcp-20260223-120530_mcp_initialize_1: 2 events
+  - remote-agent-mcp-20260223-120530_tool_execution_2: 3 events (with remote tool response)
+  - remote-agent-mcp-20260223-120530_agent_finalize_3: 0 events
+
+[OK] VERIFICATION SUCCESSFUL: Remote agent interaction verified
+```
+
+**Key Features Demonstrated:**
+- ✅ Real encrypted WebSocket connection between client and remote tool
+- ✅ Secure handshake with ECDH key exchange
+- ✅ IBS key provisioning (tool receives signing keys)
+- ✅ Remote tool responses cryptographically signed (non-repudiation)
+- ✅ Integrity of encrypted messages verified via Verkle tree
+- ✅ Complete audit trail including encrypted channel metadata
+- ✅ Identical verification workflow as other demos (same verification CLI commands)
+
+**How This Proves Remote Tool Authenticity:**
+
+The key insight: **Tool output signatures cannot be forged by the client**. Even if the client is compromised:
+1. ✅ Client cannot create valid signatures (missing tool's IBS private key)
+2. ✅ Remote tool signs its own responses (signature proves authenticity)
+3. ✅ Signatures recorded in canonical log (part of Verkle commitment)
+4. ✅ Verifier confirms signature matches tool's public key (derived from tool name)
+
+Result: Anyone can verify that the tool executed the request and returned that exact response, even if the client was untrusted.
+
+**Langfuse Integration:**
+Same as Demo 2 - automatic spans showing:
+- Session grouping
+- Encrypted message trace
+- Per-turn LLM decisions
+- Tool invocation flow
+- Complete latency breakdown per encrypted message
 
 ---
 
 ### How to Verify Locally (Anyone Can Do This)
 
-After running either demo, verify the proof without trusting the system:
+After running any demo, verify the proof without trusting the system:
 
 ```powershell
 # Activate environment
 .\venv\Scripts\Activate.ps1
 
-# Verify the prompt demo
-python -m src.tools.verify_cli verify real_workflow.jsonl "CtF/sK3Mj93lu7eXLCOFqwlAOsTP..." --verbose
+# List all workflows (find the session ID)
+python -m src.tools.verify_cli list-workflows
 
-# Verify the agent demo
-python -m src.tools.verify_cli verify real_agent_workflow.jsonl "CtF/sK3Mj93lu7eXLCOFqwlAOsTP..." --verbose
+# Verify by session ID (easiest - finds workflow automatically)
+python -m src.tools.verify_cli verify-by-id real-prompt-mcp-20260222-143944 --verbose
+
+# Or verify by file path directly
+python -m src.tools.verify_cli verify "workflows/workflow_real-prompt-mcp-20260222-143944/canonical_log.jsonl" "DmBn8+/fBTI3uYOIxP9hHwUK8E..." --verbose
 
 # Expected output
 [OK] Verification PASSED [OK]
-  Root matches: CtF/sK3Mj93lu7eXLCOFqwlAOsTP...
-  Events verified: 5
+  Root matches: DmBn8+/fBTI3uYOIxP9hHwUK8E...
+  Events verified: 2
+  Spans verified: 3
 ```
 
 ---
 
 ### 📊 Langfuse Integration in Demos
 
-Both demos automatically integrate with Langfuse if configured:
+All three demos automatically integrate with Langfuse if configured:
 
 **Setup Langfuse (5 minutes - Free Local Deployment):**
 ```powershell
@@ -486,8 +666,6 @@ Langfuse receives OpenTelemetry traces showing:
 - ✅ **Audit trail** - Traces are independently verifiable via verification CLI
 - ✅ **Zero trust required** - Traces don't prove integrity (verification CLI does), but provide monitoring
 - ✅ **Automatic export** - OTel spans sent to Langfuse automatically when configured
-
-See [LANGFUSE_SETUP_GUIDE.md](LANGFUSE_SETUP_GUIDE.md) for detailed setup and configuration.
 
 ---
 
@@ -544,6 +722,22 @@ middleware.record_event_in_span("tool_output", {"result": {...}, "signature": si
 middleware.start_span("final_response")
 middleware.record_event_in_span("final_response", {"answer": "..."}, signer_id="llm")
 
+# Optional: Record LLM generation for observability (Langfuse) - DOES NOT modify integrity log
+# This is called per LLM turn for per-turn visibility in Langfuse dashboard
+generation_id = middleware.record_llm_generation(
+    prompt="What is Verkle?",
+    response="Verkle trees are...",
+    model="arcee-ai/trinity-large",
+    name="llm_call_turn_1",
+    input_tokens=15,
+    output_tokens=42,
+    input_cost=0.0015,
+    output_cost=0.0021,
+    total_cost=0.0036,
+    turn=1
+)
+# Returns: generation_id (for Langfuse tracing), or empty string if Langfuse unavailable
+
 # Finalize with hierarchical roots
 session_root, commitments, canonical_log_bytes = middleware.finalize()
 # Returns: session_root (combines all span roots), per-span roots, commitments object
@@ -552,6 +746,11 @@ session_root, commitments, canonical_log_bytes = middleware.finalize()
 # commitments.json, metadata.json, otel_export.json, RECOVERY.md)
 middleware.save_to_local_storage(Path("workflow_abc123"))
 ```
+
+**Key Pattern:**
+- **Integrity Recording** (`record_event_in_span`): Modifies canonical log and Verkle commitments
+- **Observability Recording** (`record_llm_generation`): Langfuse-only, does NOT affect integrity log
+- **Separation of Concerns**: Integrity is cryptographically protected, observability is for dashboarding
 
 ### Deterministic Event Format
 
@@ -599,7 +798,9 @@ MCP protocol events include the full JSON-RPC 2.0 message:
   - Organizes events into OpenTelemetry-compatible spans
   - Each span gets its own Verkle root (per-span commitment)
   - Session root combines all span roots into single commitment
-  - Methods: `start_span()`, `record_event_in_span()`, `finalize()`, `save_to_local_storage()`
+  - Methods: `start_span()`, `record_event_in_span()`, `record_llm_generation()`, `finalize()`, `save_to_local_storage()`
+  - `record_event_in_span()`: Records integrity-critical events (modifies canonical log and Verkle)
+  - `record_llm_generation()`: Records LLM generations for observability ONLY (Langfuse-only, no integrity changes)
   - Returns: `Tuple[str, HierarchicalCommitments, bytes]` from `finalize()` (session_root, commitments object, canonical_log_bytes)
   - Auto-detects and integrates Langfuse if available
 - **Per-Span Event Accumulation** → **SHA-256 Hashing** → **Span-Level KZG Commitments** → **Session Root (Verkle of span roots)**
@@ -975,34 +1176,6 @@ LANGFUSE_PUBLIC_KEY=...
 LANGFUSE_SECRET_KEY=...
 ```
 
----
-
-## 🔒 Security
-
-### Tool Authorization
-
-The security middleware enforces a whitelist of authorized tools:
-
-```python
-security = SecurityMiddleware()
-security.register_authorized_tools(["calculator", "search"])
-
-# Unauthorized attempts are:
-# - Logged as security_event
-# - Blocked with neutral response
-# - Tool capability map NOT exposed to model
-```
-
-### Replay Resistance
-
-Prevents tampering through:
-1. **Session ID**: Unique per run
-2. **Monotonic Counter**: Atomic increment, persisted
-3. **Server Timestamp**: From trusted NTP-synced clock
-4. **Canonical Encoding**: Deterministic serialization
-
----
-
 ## 🧪 Testing
 
 Run the full test suite:
@@ -1070,60 +1243,6 @@ PORT=8000
 - ⚠️ **Optional**: Can run without it (OTel traces go to configured OTLP endpoint)
 - ✅ **Recommended for observability**: Dashboard shows span hierarchy, duration, tokens, costs
 - Setup: 5 minutes with Docker Compose (see LANGFUSE_SETUP_GUIDE.md)
-
----
-
-## 📚 Key Modules
-
-### `src/crypto/encoding.py`
-RFC 8785 canonical JSON encoder with deterministic serialization and support for event normalization.
-
-### `src/crypto/verkle.py`
-Verkle tree accumulator using KZG commitments over BLS12-381 elliptic curve. Produces tamper-proof root commitments.
-
-### `src/integrity/hierarchical_integrity.py` (Hierarchical Verkle)
-**HierarchicalVerkleMiddleware**: Extends IntegrityMiddleware with span-based event organization
-- OpenTelemetry-compatible span management (mcp_initialize, user_interaction, tool_execution, final_response)
-- Per-span Verkle roots with independent accumulators
-- Session-level root combining all span roots
-- Methods: `start_span()`, `record_event_in_span()`, `finalize()`, `save_to_local_storage()`, `export_to_otel_format()`
-- Automatic Langfuse integration with graceful fallback
-- Returns tuple from `finalize()`: `(session_root, HierarchicalCommitments, canonical_log_bytes)`
-- Local storage: Saves complete hierarchical structure to disk (6 files per run)
-- Tool signatures preserved: IBS signatures on tool outputs still recorded and verifiable
-
-### `src/transport/jsonrpc_protocol.py` (New)
-JSON-RPC 2.0 protocol implementation with MCP 2024-11 compliance:
-- Standard protocol versioning
-- Request/response correlation with IDs
-- Initialization handshake
-- Error codes per JSON-RPC 2.0 specification
-- Batch request support
-
-### `src/transport/mcp_protocol_adapter.py` (New)
-Adapter bridging MCPServer with JSON-RPC 2.0 protocol layer. Handles method routing and MCP specification compliance.
-
-### `src/agent/__init__.py` (Enhanced)
-MCP server runtime with:
-- Tool definition, registration, and invocation
-- Resource management (files, audit logs)
-- Prompt templates with argument rendering
-- Server capabilities advertisement
-- Notification system for event subscription
-
-### `src/security/__init__.py`
-Authorization manager and security middleware for threat prevention. Tool whitelist enforcement.
-
-### `src/observability/__init__.py`
-OTel tracing and Langfuse integration. Automatic OTel span export when Langfuse is configured.
-
-### `src/storage/__init__.py`
-Artifact and log storage management.
-
-### `src/tools/verify_cli.py`
-Public verification CLI for independent run validation. Three commands: `verify`, `extract`, `export-proof`.
-
----
 
 ## 📖 References
 
