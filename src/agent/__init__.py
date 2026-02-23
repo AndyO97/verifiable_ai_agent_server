@@ -10,6 +10,8 @@ Supports LLM-integrated agent loops with OpenRouter and Ollama.
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Optional, Type, Union
 
@@ -475,6 +477,40 @@ class MCPServer:
         result = tool.handler(**args)
         self.send_notification("tool_executed", {"tool_name": tool_name, "status": "success"})
         return result
+    
+    async def invoke_tool_async(self, tool_name: str, args: dict[str, Any]) -> Any:
+        """
+        Asynchronously invoke a tool by name with given arguments.
+        
+        Supports both synchronous and asynchronous tool handlers.
+        Automatically detects handler type and awaits if needed.
+        
+        Cryptographic Integrity Note:
+        =============================
+        This method does NOT modify integrity recording behavior.
+        All tool input/output recording is done by the caller (AIAgent.run_async)
+        using synchronous integrity middleware methods, which preserves
+        cryptographic commitments exactly as in the synchronous path.
+        
+        The async boundary is ONLY at tool invocation, not at recording.
+        """
+        if tool_name not in self.tools:
+            raise ValueError(f"Tool not found: {tool_name}")
+        
+        tool = self.tools[tool_name]
+        
+        # Validate input
+        if not tool.validate_input(args):
+            raise ValueError(f"Invalid input for tool {tool_name}")
+        
+        # Execute handler - check if it's async
+        if inspect.iscoroutinefunction(tool.handler):
+            result = await tool.handler(**args)
+        else:
+            result = tool.handler(**args)
+        
+        self.send_notification("tool_executed", {"tool_name": tool_name, "status": "success"})
+        return result
 
 
 class AIAgent:
@@ -684,6 +720,199 @@ class AIAgent:
         final_span_id = self.integrity.start_span("agent_finalize")
         
         # Finalize and commit (this finalizes the last span and creates session root)
+        session_root, commitments, canonical_log_bytes = self.integrity.finalize()
+        
+        # Build MCP 2024-11 compliant response
+        integrity_metadata = IntegrityMetadata(
+            session_id=self.integrity.session_id,
+            session_root=session_root,
+            event_accumulator_root=commitments.event_accumulator_root,
+            span_roots=commitments.span_roots,
+            canonical_log_hash=commitments.canonical_log_hash,
+            event_count=commitments.event_count,
+            timestamp=commitments.timestamp
+        )
+        
+        response = AgentResponse(
+            output=final_output,
+            integrity=integrity_metadata,
+            turns=turn_count
+        )
+        
+        logger.info("agent_run_completed", session_root=session_root, event_count=commitments.event_count)
+        
+        return response.to_dict()  # Return dict for backward compatibility with demos
+    
+    async def run_async(self, prompt: str, max_turns: int = 10) -> dict[str, Any]:
+        """
+        Asynchronously execute the agent with the given prompt.
+        
+        Identical to run() but supports async tool handlers.
+        
+        Cryptographic Integrity Note:
+        =============================
+        This method produces IDENTICAL cryptographic commitments to run().
+        All integrity recording is synchronous (unchanged):
+        - integrity.record_prompt()
+        - integrity.record_tool_input()
+        - integrity.record_tool_output()
+        - integrity.record_model_output()
+        - integrity.finalize()
+        
+        Only tool invocation is async (via invoke_tool_async).
+        This ensures complete backward compatibility and integrity preservation.
+        
+        Workflow:
+        1. Record initial prompt
+        2. Call LLM with available tools
+        3. Parse tool calls from response
+        4. For each tool call:
+           - Validate authorization
+           - Record tool input (synchronous)
+           - Execute tool async (supports both sync and async handlers)
+           - Record tool output (synchronous)
+        5. Continue until LLM produces final output
+        6. Finalize and generate Verkle root
+        
+        Args:
+            prompt: Initial user prompt
+            max_turns: Maximum turns to prevent infinite loops
+        
+        Returns:
+            Final output with integrity metadata (same as run())
+        """
+        # Start main span for entire agent execution
+        main_span_id = self.integrity.start_span("agent_run")
+        
+        # Get model name from LLM client if available
+        model_name = getattr(self.llm_client, 'model', 'unknown') if self.llm_client else 'unknown'
+        
+        # Record initial prompt (inside agent_run span)
+        self.integrity.record_prompt(prompt, metadata={"model": model_name})
+        
+        final_output = None
+        turn_count = 0
+        last_usage = {}  # Track usage from last LLM response for cost/token reporting
+        
+        try:
+            # Build tool schemas for LLM
+            tool_schemas = self.mcp.list_tools()
+            
+            conversation_history = [
+                {"role": "user", "content": prompt}
+            ]
+            
+            while turn_count < max_turns:
+                turn_count += 1
+                logger.info("agent_turn_start", turn=turn_count, session_id=self.integrity.session_id)
+                
+                # Start span for this turn (auto-finalizes previous span)
+                turn_span_id = self.integrity.start_span(f"agent_turn_{turn_count}")
+                
+                try:
+                    # Call LLM
+                    if self.llm_client is None:
+                        # Fallback: dummy implementation for testing without Ollama
+                        llm_response = self._dummy_llm_call(prompt)
+                    else:
+                        llm_response = self.llm_client.call_llm(
+                            prompt=conversation_history[-1]["content"],
+                            tools=tool_schemas
+                        )
+                    
+                    # Capture usage data for cost/token tracking
+                    last_usage = getattr(llm_response, 'usage', {}) or {}
+                    
+                    # Record LLM generation for observability (Langfuse only - no integrity impact)
+                    self.integrity.record_llm_generation(
+                        prompt=conversation_history[-1]["content"],
+                        response=llm_response.text,
+                        model=model_name,
+                        name=f"llm_call_turn_{turn_count}",
+                        input_tokens=last_usage.get("input_tokens", 0),
+                        output_tokens=last_usage.get("output_tokens", 0),
+                        turn=turn_count,
+                    )
+                    
+                    # Check if LLM wants to call tools
+                    if not llm_response.has_tool_calls():
+                        # No more tool calls - this is the final output
+                        final_output = llm_response.text
+                        logger.info("agent_final_output", output_len=len(final_output))
+                        break
+                    
+                    # Process each tool call (ASYNC PATH - supports async handlers)
+                    for tool_call in llm_response.tool_calls:
+                        logger.info("tool_call_requested", tool=tool_call.tool_name, args=tool_call.arguments)
+                        
+                        # Check authorization
+                        if not self.security.validate_tool_invocation(self.integrity.session_id, tool_call.tool_name):
+                            error_msg = f"Unauthorized tool: {tool_call.tool_name}"
+                            logger.warning("tool_call_blocked", tool=tool_call.tool_name)
+                            # Record as blocked tool attempt (synchronous)
+                            self.integrity.record_tool_input(tool_call.tool_name, tool_call.arguments)
+                            tool_result = f"Error: {error_msg}"
+                            self.integrity.record_tool_output(tool_call.tool_name, tool_result)
+                        else:
+                            # Record tool input (synchronous - doesn't change commitments)
+                            self.integrity.record_tool_input(tool_call.tool_name, tool_call.arguments)
+                            
+                            # Execute tool (ASYNC - supports both sync and async handlers)
+                            try:
+                                tool_result = await self.mcp.invoke_tool_async(
+                                    tool_call.tool_name,
+                                    tool_call.arguments
+                                )
+                                logger.info("tool_executed", tool=tool_call.tool_name, result=str(tool_result)[:100])
+                            except Exception as e:
+                                tool_result = f"Error executing tool: {str(e)}"
+                                logger.exception("tool_execution_error", tool=tool_call.tool_name)
+                            
+                            # Record tool output (synchronous - doesn't change commitments)
+                            self.integrity.record_tool_output(tool_call.tool_name, tool_result)
+                    
+                    # Add assistant response to conversation for next turn
+                    conversation_history.append({
+                        "role": "assistant",
+                        "content": llm_response.text
+                    })
+                    
+                    # If tools were called, add a message indicating they were processed
+                    if llm_response.tool_calls:
+                        conversation_history.append({
+                            "role": "user",
+                            "content": "Tools have been executed. Please continue or provide final answer."
+                        })
+                
+                except Exception as e:
+                    logger.exception("turn_error", turn=turn_count, error=str(e))
+                    raise
+            
+            # Fallback if we hit max turns
+            if final_output is None:
+                final_output = "Agent reached maximum turns without final output"
+                logger.warning("agent_max_turns_reached", max_turns=max_turns)
+        
+        except Exception as e:
+            logger.exception("agent_error", error=str(e))
+            final_output = f"Error during agent execution: {str(e)}"
+        
+        # Record final output (synchronous - doesn't change commitments)
+        if final_output:
+            output_metadata = {
+                "model": model_name,
+                "input_tokens": last_usage.get("input_tokens", 0),
+                "output_tokens": last_usage.get("output_tokens", 0),
+                "total_tokens": last_usage.get("total_tokens", 0),
+            }
+            self.integrity.record_model_output(final_output, metadata=output_metadata)
+        
+        # Start a final span to finalize all previous spans
+        # This ensures the last turn span gets finalized
+        final_span_id = self.integrity.start_span("agent_finalize")
+        
+        # Finalize and commit (this finalizes the last span and creates session root)
+        # IMPORTANT: This is identical to synchronous run() - produces same commitments
         session_root, commitments, canonical_log_bytes = self.integrity.finalize()
         
         # Build MCP 2024-11 compliant response

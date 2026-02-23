@@ -108,17 +108,33 @@ async def main():
         # STEP 3: Register Remote Tool with MCP Server
         print_subheader("STEP 3: Register Remote Tool with MCP Server")
         
-        # Create a wrapper tool for the remote tool
-        def remote_calc_wrapper(expression: str) -> str:
-            """Wrapper for remote calculation tool."""
-            # Note: In real implementation, this would make async calls to the remote tool
-            # For demo purposes, we'll just return a placeholder
-            return f"Remote calculation of '{expression}' via secure channel"
+        # Create an async wrapper tool for the remote tool
+        # This closure captures the client variable for secure WebSocket calls
+        async def remote_calc_wrapper(expression: str) -> str:
+            """
+            Async wrapper for remote calculation tool.
+            
+            Makes actual encrypted calls to the remote tool via secure WebSocket.
+            Client and middleware are available via closure.
+            
+            Args:
+                expression: Mathematical expression to evaluate
+                
+            Returns:
+                Result from remote tool as string
+            """
+            try:
+                # Make actual call to remote tool via secure ECDH-AES256-GCM channel
+                result = await client.call_tool("remote_calc", {"expression": expression})
+                return str(result)
+            except Exception as e:
+                return f"Error calling remote tool: {str(e)}"
         
-        # Register remote tool in MCP server
+        # Register remote tool in MCP server with async handler
+        # The async handler will be properly awaited by AIAgent.run_async()
         mcp_server.register_tool(ToolDefinition(
             name=TOOL_NAME,
-            description="Remote calculation tool accessed via secure WebSocket connection",
+            description="Remote calculation tool accessed via secure WebSocket connection with ECDH-AES256-GCM encryption",
             input_schema={"expression": str},
             handler=remote_calc_wrapper
         ))
@@ -167,8 +183,8 @@ Then explain the result."""
         print(f"{CYAN}User Request:{RESET}")
         print(f"  {user_prompt}\n")
         
-        # Run agent (AIAgent handles remote tool invocation)
-        result = agent.run(prompt=user_prompt, max_turns=8)
+        # Run agent with async handler support (AIAgent.run_async handles async tool handlers)
+        result = await agent.run_async(prompt=user_prompt, max_turns=8)
         
         print(f"\n{BOLD}Agent Response:{RESET}")
         # Ensure result is in dict format for compatibility (MCP 2024-11 compliant)
