@@ -631,7 +631,56 @@ python -m src.tools.verify_cli verify "workflows/workflow_real-prompt-mcp-202602
 
 ---
 
-### 📊 Langfuse Integration in Demos
+### � Recovery from Data Loss
+
+Each workflow is stored as a self-contained directory with 5 cryptographically verifiable files:
+
+**Workflow Files (Located in `workflows/workflow_{session_id}/`):**
+- `canonical_log.jsonl` - All raw events (source of truth for verification)
+- `spans_structure.json` - OpenTelemetry span organization and hierarchy
+- `commitments.json` - Verkle tree roots and cryptographic commitments
+- `metadata.json` - Session metadata (timestamps, event counts, log hash)
+- `otel_export.json` - Complete span trace in OpenTelemetry JSON format
+
+**Recovery Scenarios:**
+
+**Scenario 1: Langfuse Dashboard Lost**
+If your Langfuse instance becomes unavailable or is deleted:
+1. You still have complete cryptographic proof in `canonical_log.jsonl`
+2. All span structure is preserved in `spans_structure.json`
+3. Session root in `commitments.json` allows complete verification
+4. Run verification CLI to independently prove nothing was tampered with:
+   ```powershell
+   python -m src.tools.verify_cli verify-by-id {session_id} --verbose
+   ```
+
+**Scenario 2: Verify Span Integrity**
+To verify individual spans match the session root:
+```powershell
+python -m src.tools.verify_cli verify "workflows/workflow_{session_id}/canonical_log.jsonl" "{session_root}" --verbose
+```
+
+**Scenario 3: Export for Long-Term Archival**
+Create an audit-ready proof document:
+```powershell
+python -m src.tools.verify_cli export-proof "workflows/workflow_{session_id}/canonical_log.jsonl" "{session_root}" \
+  --output proof.json \
+  --include-events
+```
+
+**Why This Design Works:**
+- ✅ **Self-Contained**: Each workflow is independent, no external dependencies
+- ✅ **Cryptographically Verifiable**: Commitment is deterministic proof of integrity
+- ✅ **Human-Readable**: Access `canonical_log.jsonl` to see all events
+- ✅ **Platform-Agnostic**: Works without Langfuse, PostgreSQL, or any external systems
+- ✅ **Audit-Ready**: Complete lineage from event occurrence to cryptographic proof
+
+**Key Insight:**
+The Langfuse dashboard provides observability and trace visualization, but the cryptographic proof exists independently in the workflow directory. You can delete Langfuse and still verify everything using the verification CLI.
+
+---
+
+### �📊 Langfuse Integration in Demos
 
 All three demos automatically integrate with Langfuse if configured:
 
@@ -742,8 +791,8 @@ generation_id = middleware.record_llm_generation(
 session_root, commitments, canonical_log_bytes = middleware.finalize()
 # Returns: session_root (combines all span roots), per-span roots, commitments object
 
-# Save to local storage (creates 6 files: canonical_log.jsonl, spans_structure.json, 
-# commitments.json, metadata.json, otel_export.json, RECOVERY.md)
+# Save to local storage (creates 5 files: canonical_log.jsonl, spans_structure.json, 
+# commitments.json, metadata.json, otel_export.json)
 middleware.save_to_local_storage(Path("workflow_abc123"))
 ```
 
@@ -807,7 +856,7 @@ MCP protocol events include the full JSON-RPC 2.0 message:
 - Algorithm: KZG polynomial commitments with BLS12-381 pairing-friendly curves
 - Status: ✅ **Fully functional and tested** (128+ tests passing, hierarchical spans verified with 6-file local storage)
 - Integration: Automatic Langfuse export with graceful fallback if unavailable
-- Local Storage: Saves 6 files per run (canonical_log.jsonl, spans_structure.json, commitments.json, metadata.json, otel_export.json, RECOVERY.md)
+- Local Storage: Saves 5 files per run (canonical_log.jsonl, spans_structure.json, commitments.json, metadata.json, otel_export.json)
 
 ### Key Properties
 

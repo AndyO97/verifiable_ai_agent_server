@@ -206,8 +206,7 @@ def demo_hierarchical_spans():
     print(f"  - spans_structure.json (OTel layout)")
     print(f"  - commitments.json (Verkle roots)")
     print(f"  - metadata.json (session metadata)")
-    print(f"  - otel_export.json (OpenTelemetry format)")
-    print(f"  - RECOVERY.md (recovery instructions)\n")
+    print(f"  - otel_export.json (OpenTelemetry format)\n")
     
     # Display OTel export
     print_subheader("STEP 9: OpenTelemetry Export Format")

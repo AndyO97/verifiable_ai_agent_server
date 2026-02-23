@@ -51,7 +51,7 @@
 | **Test Coverage** | 128+ tests (core features + integration) |
 | **Demos** | 3 production demos with hierarchical spans (real_prompt_demo, real_agent_demo, agent_remote_demo) |
 | **Validation** | ✅ All demos tested with real LLM calls and Langfuse integration |
-| **Local Storage** | 6 files per run: canonical_log.jsonl, spans_structure.json, commitments.json, metadata.json, otel_export.json, RECOVERY.md |
+| **Local Storage** | 5 files per run: canonical_log.jsonl, spans_structure.json, commitments.json, metadata.json, otel_export.json |
 
 ---
 
@@ -103,7 +103,7 @@ middleware.save_to_local_storage(Path("workflow_abc123"))  # 6 files created
 - **real_prompt_demo.py**: 3-span structure (mcp_initialize, user_interaction, final_response) with session root
 - **real_agent_demo.py**: 4-span agent (mcp_initialize, user_interaction, tool_execution, final_response) with multi-turn tool calls
 - **agent_remote_demo.py**: Secure remote execution with 4 spans, IBS signature verification, encrypted tool invocation
-- **Status**: All 3 demos tested with hierarchical spans, local storage created (6 files per run), Langfuse integration verified
+- **Status**: All 3 demos tested with hierarchical spans, local storage created (5 files per run), Langfuse integration verified
 
 ### 4. ✅ Enhanced MCP Server Capabilities
 - Added Resource management (VerificationAuditLogResource)
@@ -114,7 +114,7 @@ middleware.save_to_local_storage(Path("workflow_abc123"))  # 6 files created
 ### 5. ✅ Comprehensive Test Suite & Production-Ready Implementation
 - **Hierarchical Spans Verified**: Per-span roots computed correctly, session root aggregates all spans
 - **Tool Signatures Preserved**: IBS signatures on tool outputs still recorded and verifiable in span context
-- **Local Storage**: All 6 files created per run (canonical_log.jsonl, spans_structure.json, commitments.json, metadata.json, otel_export.json, RECOVERY.md)
+- **Local Storage**: All 5 files created per run (canonical_log.jsonl, spans_structure.json, commitments.json, metadata.json, otel_export.json)
 - **Langfuse Integration**: OTel spans exported hierarchically, traces visible in Langfuse dashboard
 - **Total**: 128+ tests (up from 60+), all passing
 - **Duration**: ~3-4 minutes full suite
@@ -131,7 +131,7 @@ Phase 3 enhances **Verkle trees with KZG polynomial commitments** with hierarchi
 - **Per-Span Verkle Roots**: Each span (mcp_initialize, user_interaction, tool_execution, final_response) gets independent commitment
 - **Session-Level Root**: Single commitments object combines all span roots for complete session verification
 - **Span Hierarchy**: OpenTelemetry-compatible span structure with start/end times, event counts, duration metrics
-- **Local Storage**: 6 files per run enable complete offline verification and audit trail preservation
+- **Local Storage**: 5 files per run enable complete offline verification and audit trail preservation
 - **Langfuse Integration**: Hierarchical spans exported as OTel structure, visible in Langfuse dashboard
 - **Tool Signature Preservation**: IBS signatures on tool outputs recorded within tool_execution span context
 - **Deterministic Verification**: Span-level and session-level verification, hash validation to detect tampering
@@ -521,7 +521,7 @@ All events follow RFC 8785 canonical encoding:
 2. **Unified HierarchicalVerkleMiddleware** handles spans, accumulation, and Langfuse automatically
 3. **OpenTelemetry compatibility** enables span hierarchy export and Langfuse dashboard visualization
 4. **Tool signatures preserved** - IBS signatures still recorded and verifiable in tool_execution span
-5. **Local storage with 6 files** provides complete offline verification and audit trail
+5. **Local storage with 5 files** provides complete offline verification and audit trail
 6. **128+ tests** provide high confidence in hierarchical span correctness and root computation
 
 ---
@@ -536,7 +536,7 @@ All events follow RFC 8785 canonical encoding:
 | **Code Coverage** | 95%+ core modules |
 | **Demos** | 3 with hierarchical spans (all tested) |
 | **Span Types** | 4 (mcp_initialize, user_interaction, tool_execution, final_response) |
-| **Files Per Run** | 6 (canonical_log.jsonl, spans_structure.json, commitments.json, metadata.json, otel_export.json, RECOVERY.md) |
+| **Files Per Run** | 5 (canonical_log.jsonl, spans_structure.json, commitments.json, metadata.json, otel_export.json) |
 | **Version** | 2024-11 (MCP) with Hierarchical Verkle |
 | **Python** | 3.11+ |
 
@@ -835,7 +835,7 @@ python -m src.tools.verify_cli export-proof ./logs/run.json "CtF/sK3Mj93lu7eXLCO
 - Replay-resistance metadata (session_id, counter, timestamp)
 - Verkle accumulator integration (per-span + session-level)
 - Finalization workflow returning (session_root, commitments, canonical_log)
-- Local storage with 6 files (canonical_log.jsonl, spans_structure.json, commitments.json, metadata.json, otel_export.json, RECOVERY.md)
+- Local storage with 5 files (canonical_log.jsonl, spans_structure.json, commitments.json, metadata.json, otel_export.json)
 - Tool signature preservation (IBS signatures in tool_execution span)
 
 #### 3. **Security Middleware** ✅
@@ -1306,7 +1306,7 @@ PORT=8000
 ✅ **Secure Remote Tools**: ECDH-AES256-GCM encryption with IBS signatures for tool authenticity
 ✅ **Observability**: Automatic Langfuse integration with hierarchical OTel span export
 ✅ **Public Verification**: 6 verification commands for independent run validation
-✅ **Local Storage**: 6 files per run (canonical log, spans, commitments, metadata, OTel, recovery)
+✅ **Local Storage**: 5 files per run (canonical log, spans, commitments, metadata, OTel)
 ✅ **Production Ready**: Feature-complete with all 10 Phase 3 tasks accomplished
 
 **Next Step**: Run `python real_prompt_demo.py` to see hierarchical integrity in action! 🚀
@@ -1599,7 +1599,7 @@ Expected output: Real LLM interactions with cryptographic commitments
 - [x] 3 production demos with real LLM calls
 - [x] Secure remote tool execution (ECDH-AES256-GCM)
 - [x] Public verification CLI (6 commands)
-- [x] Local storage (6 files per run)
+- [x] Local storage (5 files per run)
 - [x] 124+ comprehensive tests
 
 ### 📋 Phase 4: Scale & Production Hardening (Future)
