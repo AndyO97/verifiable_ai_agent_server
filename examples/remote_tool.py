@@ -44,29 +44,61 @@ TOOL_NAME = "remote_calc"
 
 def calculator_logic(args):
     """
-    The actual business logic of the tool.
+    Remote calculator business logic.
     
-    NOTE: This function returns the raw result. The SecureMCPServer will:
-    1. Wrap result in JSON-RPC 2.0 response format
-    2. Create canonical JSON of full response (including request ID)
-    3. Sign full response using IBS (Option B - Recommended)
-    4. Return signed JSON-RPC response to agent
+    Accepts two input modes:
+      1. Expression string:  {"expression": "2048 + 512 - 256"}
+      2. Structured operation: {"op": "add", "a": 10, "b": 5}
     
-    This ensures signature is bound to request ID, preventing replay attacks
-    while maintaining full JSON-RPC protocol compliance.
+    Returns a dict with the input echo and computed result,
+    or {"error": "..."} on failure.
+    
+    NOTE: The SecureMCPServer wraps the return value in a signed
+    JSON-RPC 2.0 response (IBS over the full response object).
     """
+    # --- Mode 1: expression string (preferred by LLMs) ---
+    expression = args.get("expression")
+    if expression is not None:
+        expr_str = str(expression).strip()
+        # Allow only digits, basic math operators, parentheses, spaces, and dots
+        allowed = set("0123456789+-*/.() ")
+        if not all(ch in allowed for ch in expr_str):
+            return {"error": f"Invalid characters in expression: {expr_str}"}
+        try:
+            result = eval(expr_str, {"__builtins__": {}}, {})
+            return {"expression": expr_str, "result": result}
+        except Exception as e:
+            return {"error": f"Failed to evaluate '{expr_str}': {e}"}
+
+    # --- Mode 2: structured operation ---
     op = args.get("op")
     a = args.get("a", 0)
     b = args.get("b", 0)
-    
-    if op == "add":
-        return a + b
-    elif op == "sub":
-        return a - b
-    elif op == "mul":
-        return a * b
-    else:
-        return f"Unknown Operation: {op}"
+
+    try:
+        a = float(a)
+        b = float(b)
+    except (TypeError, ValueError):
+        return {"error": f"Arguments a={a!r}, b={b!r} must be numbers"}
+
+    operations = {
+        "add": lambda: a + b,
+        "sub": lambda: a - b,
+        "mul": lambda: a * b,
+        "div": lambda: a / b if b != 0 else (_ for _ in ()).throw(ZeroDivisionError("Division by zero")),
+    }
+
+    if op not in operations:
+        return {"error": f"Unknown operation '{op}'. Supported: add, sub, mul, div"}
+
+    try:
+        result = operations[op]()
+        # Return int when the result is a whole number
+        if isinstance(result, float) and result == int(result):
+            result = int(result)
+        return {"op": op, "a": a, "b": b, "result": result}
+    except Exception as e:
+        return {"error": str(e)}
 
 if __name__ == "__main__":
     async def main():

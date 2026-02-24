@@ -97,6 +97,9 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
     
+    # LLM provider selection: "ollama" (default) or "openrouter"
+    llm_provider: str = "ollama"
+    
     # Crypto
     session_timeout_seconds: int = 3600
     security: SecuritySettings = SecuritySettings()

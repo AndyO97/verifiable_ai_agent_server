@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import os
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Optional, Type, Union
 
@@ -566,6 +567,51 @@ class AIAgent:
         
         logger.info("ai_agent_initialized", session_id=self.integrity.session_id)
     
+    @staticmethod
+    def create_llm_client() -> Union["OllamaClient", "OpenRouterClient"]:
+        """
+        Factory method: create the appropriate LLM client based on LLM_PROVIDER env var.
+        
+        Providers:
+            - "ollama"  (default): Local Ollama at OLLAMA_BASE_URL
+            - "openrouter": Cloud-based OpenRouter.ai API
+        
+        Returns:
+            Configured LLM client (OllamaClient or OpenRouterClient)
+            
+        Raises:
+            ValueError: If provider is unknown or required config is missing
+        """
+        from dotenv import load_dotenv
+        load_dotenv()
+        
+        provider = os.getenv("LLM_PROVIDER", "ollama").lower()
+        
+        if provider == "ollama":
+            from src.llm import OllamaClient
+            base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+            model = os.getenv("OLLAMA_MODEL", "llama3.1")
+            client = OllamaClient(model=model, base_url=base_url)
+            logger.info("llm_client_created", provider="ollama", model=model, base_url=base_url)
+            return client
+        
+        elif provider == "openrouter":
+            from src.llm import OpenRouterClient
+            api_key = os.getenv("OPENROUTER_API_KEY", "")
+            model = os.getenv("OPENROUTER_MODEL", "arcee-ai/trinity-large-preview:free")
+            if not api_key:
+                raise ValueError(
+                    "OPENROUTER_API_KEY not set. Get a free key at: https://openrouter.ai/keys"
+                )
+            client = OpenRouterClient(api_key=api_key, model=model)
+            logger.info("llm_client_created", provider="openrouter", model=model)
+            return client
+        
+        else:
+            raise ValueError(
+                f"Unknown LLM_PROVIDER: '{provider}'. Supported: 'ollama', 'openrouter'"
+            )
+    
     def run(self, prompt: str, max_turns: int = 10) -> dict[str, Any]:
         """
         Execute the agent with the given prompt.
@@ -618,13 +664,13 @@ class AIAgent:
                 turn_span_id = self.integrity.start_span(f"agent_turn_{turn_count}")
                 
                 try:
-                    # Call LLM
+                    # Call LLM with full conversation history
                     if self.llm_client is None:
                         # Fallback: dummy implementation for testing without Ollama
                         llm_response = self._dummy_llm_call(prompt)
                     else:
                         llm_response = self.llm_client.call_llm(
-                            prompt=conversation_history[-1]["content"],
+                            messages=conversation_history,
                             tools=tool_schemas
                         )
                     
@@ -649,7 +695,8 @@ class AIAgent:
                         logger.info("agent_final_output", output_len=len(final_output))
                         break
                     
-                    # Process each tool call
+                    # Process each tool call and collect results
+                    tool_results_parts = []
                     for tool_call in llm_response.tool_calls:
                         logger.info("tool_call_requested", tool=tool_call.tool_name, args=tool_call.arguments)
                         
@@ -678,6 +725,8 @@ class AIAgent:
                             
                             # Record tool output
                             self.integrity.record_tool_output(tool_call.tool_name, tool_result)
+                        
+                        tool_results_parts.append(f"Tool '{tool_call.tool_name}' returned: {tool_result}")
                     
                     # Add assistant response to conversation for next turn
                     conversation_history.append({
@@ -685,11 +734,12 @@ class AIAgent:
                         "content": llm_response.text
                     })
                     
-                    # If tools were called, add a message indicating they were processed
+                    # Feed tool results back to LLM with full context
                     if llm_response.tool_calls:
+                        results_msg = "\n".join(tool_results_parts)
                         conversation_history.append({
                             "role": "user",
-                            "content": "Tools have been executed. Please continue or provide final answer."
+                            "content": f"Tool results:\n{results_msg}\n\nBased on these tool results, please provide your final answer."
                         })
                 
                 except Exception as e:
@@ -807,13 +857,13 @@ class AIAgent:
                 turn_span_id = self.integrity.start_span(f"agent_turn_{turn_count}")
                 
                 try:
-                    # Call LLM
+                    # Call LLM with full conversation history
                     if self.llm_client is None:
                         # Fallback: dummy implementation for testing without Ollama
                         llm_response = self._dummy_llm_call(prompt)
                     else:
                         llm_response = self.llm_client.call_llm(
-                            prompt=conversation_history[-1]["content"],
+                            messages=conversation_history,
                             tools=tool_schemas
                         )
                     
@@ -839,6 +889,7 @@ class AIAgent:
                         break
                     
                     # Process each tool call (ASYNC PATH - supports async handlers)
+                    tool_results_parts = []
                     for tool_call in llm_response.tool_calls:
                         logger.info("tool_call_requested", tool=tool_call.tool_name, args=tool_call.arguments)
                         
@@ -867,6 +918,8 @@ class AIAgent:
                             
                             # Record tool output (synchronous - doesn't change commitments)
                             self.integrity.record_tool_output(tool_call.tool_name, tool_result)
+                        
+                        tool_results_parts.append(f"Tool '{tool_call.tool_name}' returned: {tool_result}")
                     
                     # Add assistant response to conversation for next turn
                     conversation_history.append({
@@ -874,11 +927,12 @@ class AIAgent:
                         "content": llm_response.text
                     })
                     
-                    # If tools were called, add a message indicating they were processed
+                    # Feed tool results back to LLM with full context
                     if llm_response.tool_calls:
+                        results_msg = "\n".join(tool_results_parts)
                         conversation_history.append({
                             "role": "user",
-                            "content": "Tools have been executed. Please continue or provide final answer."
+                            "content": f"Tool results:\n{results_msg}\n\nBased on these tool results, please provide your final answer."
                         })
                 
                 except Exception as e:

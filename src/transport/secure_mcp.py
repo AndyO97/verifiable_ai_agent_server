@@ -132,8 +132,7 @@ class SecureMCPServer:
 
                 except Exception as e:
                     logger.error(f"Error processing request: {e}", exc_info=True)
-                    error_resp = {"error": str(e)}
-                    # Ideally we encrypt this too
+                    error_resp = {"error": str(e), "request_id": req_id}
                     await websocket.send(kex.encrypt_data(self.session.shared_key, json.dumps(error_resp).encode('utf-8')))
 
         except websockets.exceptions.ConnectionClosedOK:
