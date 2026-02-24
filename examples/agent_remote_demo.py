@@ -234,7 +234,7 @@ Then explain the result."""
         # STEP 8: Audit Trail & Verification Commands
         print_subheader("STEP 8: Audit Trail & Verification Commands")
         
-        canonical_log_path = workflow_dir / "canonical_log.jsonl"
+        canonical_log_path = workflow_dir / "canonical_log.json"
         
         print(f"{GREEN}[OK] Hierarchical structure saved to: {workflow_dir}{RESET}")
         print(f"{GREEN}[OK] Session ID: {middleware.session_id}{RESET}\n")

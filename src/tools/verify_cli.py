@@ -130,16 +130,17 @@ def verify(
     Verify an agent run by reconstructing the Verkle tree.
     
     Steps:
-    1. Load canonical log from file
+    1. Load canonical log from file (JSON array format, OTel-compliant)
     2. Verify hash if provided
     3. Parse events from log
-    4. Recompute Verkle root via KZG commitment
-    5. Compare against provided commitment
+    4. Reconstruct Verkle tree (skipping span_commitment events)
+    5. Verify reconstructed span roots match stored commitments
+    6. Compare session root against provided commitment
     
     Returns exit code 0 on success, 1 on verification failure.
     
     Example:
-        verify ./run_log.json "YWJjZGVmZ2hp..." --hash "abc123..."
+        verify ./workflow_xxx/canonical_log.json "YWJjZGVmZ2hp..." --hash "abc123..."
     """
     
     try:
@@ -150,16 +151,16 @@ def verify(
             raise typer.Exit(1)
         
         with open(log_path, "r", encoding="utf-8") as f:
-            canonical_log = f.read()
+            canonical_log_text = f.read()
         
-        typer.echo(f"[OK] Loaded canonical log ({len(canonical_log):,} bytes)")
+        typer.echo(f"[OK] Loaded canonical log ({len(canonical_log_text):,} bytes)")
         
         # Verify hash if provided
         if expected_hash:
             if verbose:
                 typer.echo("Computing SHA-256 hash...")
             
-            actual_hash = hashlib.sha256(canonical_log.encode("utf-8")).hexdigest()
+            actual_hash = hashlib.sha256(canonical_log_text.encode("utf-8")).hexdigest()
             if actual_hash != expected_hash:
                 typer.echo(f"[ERROR] Hash mismatch!", err=True)
                 typer.echo(f"  Expected: {expected_hash}", err=True)
@@ -180,24 +181,58 @@ def verify(
         if verbose:
             typer.echo(f"Expected root: {expected_root_b64[:20]}...")
         
-        # Parse canonical log to extract events
+        # Parse canonical log (JSON array format, containing ONLY events, no metadata)
         if verbose:
             typer.echo("Parsing canonical log...")
         
+        events = []
+        
         try:
-            log_data = json.loads(canonical_log)
+            # Parse as JSON array
+            data = json.loads(canonical_log_text)
+            if isinstance(data, list):
+                events = data
+            else:
+                # Single event
+                events = [data]
         except json.JSONDecodeError as e:
             typer.echo(f"[ERROR] Error: Invalid JSON in log file: {e}", err=True)
             raise typer.Exit(1)
-        
-        # Handle both single event and array of events
-        events = log_data if isinstance(log_data, list) else [log_data]
         
         if not events:
             typer.echo(f"[ERROR] Error: No events found in log", err=True)
             raise typer.Exit(1)
         
-        typer.echo(f"[OK] Parsed {len(events)} events from log")
+        typer.echo(f"[OK] Parsed {len(events)} events from canonical log")
+        
+        # Extract span_names from events
+        span_names = {}
+        for event in events:
+            span_id = event.get("span_id")
+            span_name = event.get("span_name")
+            if span_id and span_name and span_id not in span_names:
+                span_names[span_id] = span_name
+        
+        # Load commitments to get expected span roots
+        log_dir = Path(canonical_log_path).parent
+        commitments_path = log_dir / "commitments.json"
+        
+        span_commitments = {}
+        if commitments_path.exists():
+            try:
+                with open(commitments_path, "r") as f:
+                    commitments_data = json.load(f)
+                    span_roots_data = commitments_data.get("span_roots", {})
+                    # Transform to dict with span_root and span_name
+                    for span_id, span_root_b64 in span_roots_data.items():
+                        span_commitments[span_id] = {
+                            "span_root": span_root_b64,
+                            "span_name": span_names.get(span_id, span_id)
+                        }
+                    if verbose:
+                        typer.echo(f"[OK] Loaded {len(span_commitments)} span commitments from commitments.json")
+            except Exception as e:
+                typer.echo(f"[WARNING] Could not load commitments.json: {e}", err=True)
         
         # Extract session_id from first event
         session_id = events[0].get("session_id", "unknown")
@@ -211,28 +246,132 @@ def verify(
             app_events, protocol_events = categorize_events(events)
             print_event_breakdown(app_events, protocol_events)
         
-        # Reconstruct tree and verify root
+        # Group events by span_id and reconstruct per-span Verkle trees
         if verbose:
-            typer.echo("\nVerifying Verkle tree root...")
-        else:
-            typer.echo("Verifying Verkle tree root...")
+            typer.echo("\nGrouping events by span...")
         
-        accumulator = VerkleAccumulator(session_id)
+        events_by_span = {}
+        for event in events:
+            span_id = event.get("span_id", "unknown")
+            if span_id not in events_by_span:
+                events_by_span[span_id] = []
+            events_by_span[span_id].append(event)
         
-        for i, event in enumerate(events):
+        if verbose:
+            typer.echo(f"  Found {len(events_by_span)} unique spans")
+        
+        # Reconstruct per-span Verkle trees
+        if verbose:
+            typer.echo("\nVerifying per-span Verkle roots...")
+        
+        span_roots = {}  # span_id -> computed root
+        
+        for span_id, span_events in events_by_span.items():
+            if verbose:
+                typer.echo(f"  Span: {span_id}")
+            
+            # Initialize accumulator with span_id 
+            # Note: Using the full span_id for consistency with recording
+            accumulator = VerkleAccumulator(f"{session_id}_{span_id}")
+            
             try:
-                accumulator.add_event(event)
-                if verbose and (i + 1) % max(1, len(events) // 10) == 0:
-                    typer.echo(f"  Processed {i + 1}/{len(events)} events...")
+                for i, event in enumerate(span_events):
+                    # Reconstruct verification event with ONLY core fields (not metadata)
+                    # Use 0-indexed position within span as the counter
+                    # Extract attributes from canonical_log (matches storage structure)
+                    attributes = event.get("attributes")  # From canonical_log.json structure
+                    
+                    # Only include core event fields - NO signature/signer_id (they're not hashed)
+                    verification_event = {
+                        "session_id": event.get("session_id"),
+                        "counter": i,  # Per-span counter: 0, 1, 2...
+                        "timestamp": event.get("timestamp"),  # Use stored timestamp, not new one
+                        "event_type": event.get("event_type"),
+                        "payload": attributes,  # Merkle accumulator field (from canonical attributes)
+                        "span_id": event.get("span_id"),
+                    }
+                    
+                    accumulator.add_event(verification_event)
+                    if verbose and (i + 1) % max(1, len(span_events) // 5) == 0:
+                        typer.echo(f"    Processed {i + 1}/{len(span_events)} events...")
             except Exception as e:
-                typer.echo(f"[ERROR] Error processing event {i}: {e}", err=True)
+                typer.echo(f"[ERROR] Error processing event {i} in span {span_id}: {e}", err=True)
+                raise typer.Exit(1)
+            
+            # Finalize and get computed root
+            try:
+                span_root = accumulator.finalize()
+                span_roots[span_id] = span_root
+                
+                if verbose:
+                    span_root_b64 = base64.b64encode(span_root).decode()
+                    typer.echo(f"    Computed root: {span_root_b64[:20]}...")
+            except Exception as e:
+                typer.echo(f"[ERROR] Error finalizing Verkle tree for span {span_id}: {e}", err=True)
                 raise typer.Exit(1)
         
-        # Finalize and get computed root
+        # Verify span commitments
+        if verbose:
+            typer.echo("\nVerifying span commitments...")
+        
+        all_spans_valid = True
+        for span_id, commitment in span_commitments.items():
+            if span_id in span_roots:
+                expected_span_root_b64 = commitment.get("span_root")
+                if expected_span_root_b64:
+                    try:
+                        expected_span_root = base64.b64decode(expected_span_root_b64)
+                        computed_span_root = span_roots[span_id]
+                        
+                        if computed_span_root == expected_span_root:
+                            if verbose:
+                                typer.echo(f"  [OK] Span {span_id}: root matches")
+                        else:
+                            typer.echo(f"[ERROR] Span {span_id}: root mismatch", err=True)
+                            typer.echo(f"    Expected: {expected_span_root_b64[:30]}...", err=True)
+                            typer.echo(f"    Computed: {base64.b64encode(computed_span_root).decode()[:30]}...", err=True)
+                            all_spans_valid = False
+                    except Exception as e:
+                        typer.echo(f"[ERROR] Error verifying span {span_id}: {e}", err=True)
+                        raise typer.Exit(1)
+        
+        if not all_spans_valid:
+            typer.echo(f"\n[ERROR] Verification FAILED: span root mismatch [ERROR]", err=True)
+            raise typer.Exit(1)
+        
+        # Reconstruct session root from span roots
+        if verbose:
+            typer.echo("\nReconstructing session root from span roots...")
+        
+        session_accumulator = VerkleAccumulator(session_id)
+        
+        # Add span roots to session accumulator in sorted order
+        # Must match exactly how recording does it in _finalize_current_span
+        session_counter = 0
+        for span_id in sorted(span_roots.keys()):
+            span_root = span_roots[span_id]
+            
+            # Reconstruct span commitment event exactly as recorded
+            span_event = {
+                "session_id": session_id,
+                "counter": session_counter,  # Session-level span commitment counter
+                "event_type": "span_commitment",
+                "span_id": span_id,
+                "span_name": span_commitments.get(span_id, {}).get("span_name", span_id),
+                "span_root": base64.b64encode(span_root).decode(),  # Direct field, not in attributes
+                "event_count": 1,  # This span had events (since we only process non-empty spans)
+            }
+            session_counter += 1
+            try:
+                session_accumulator.add_event(span_event)
+            except Exception as e:
+                typer.echo(f"[ERROR] Error adding span root for {span_id}: {e}", err=True)
+                raise typer.Exit(1)
+        
         try:
-            computed_root = accumulator.finalize()
+            computed_root = session_accumulator.finalize()
         except Exception as e:
-            typer.echo(f"[ERROR] Error finalizing Verkle tree: {e}", err=True)
+            typer.echo(f"[ERROR] Error finalizing session Verkle tree: {e}", err=True)
             raise typer.Exit(1)
         
         # Compare roots
@@ -241,7 +380,8 @@ def verify(
                 typer.echo(f"\n[OK] Verification PASSED [OK] (MCP Compliant)")
             else:
                 typer.echo(f"\n[OK] Verification PASSED [OK]")
-            typer.echo(f"  Root matches: {base64.b64encode(computed_root).decode()[:20]}...")
+            typer.echo(f"  Session root matches: {base64.b64encode(computed_root).decode()[:20]}...")
+            typer.echo(f"  Spans verified: {len(span_roots)}")
             typer.echo(f"  Events verified: {len(events)}")
             raise typer.Exit(0)
         else:
@@ -267,13 +407,15 @@ def extract(
     
     Shows:
     - Session ID
-    - Event count
-    - Event types
+    - Event count and breakdown by type
+    - Span count
     - Log hash (SHA-256)
     - File size
     
+    Supports JSON array format (OTel-compliant).
+    
     Example:
-        extract ./run_log.json
+        extract ./workflow_xxx/canonical_log.json
     """
     
     try:
@@ -283,17 +425,36 @@ def extract(
             raise typer.Exit(1)
         
         with open(log_path, "rb") as f:
-            canonical_log = f.read()
+            canonical_log_bytes = f.read()
         
-        # Parse JSON
+        canonical_log_text = canonical_log_bytes.decode("utf-8")
+        
+        # Parse JSON array format
         try:
-            log_data = json.loads(canonical_log.decode("utf-8"))
+            data = json.loads(canonical_log_text)
+            if isinstance(data, list):
+                events = data
+            else:
+                events = [data]
         except json.JSONDecodeError as e:
             typer.echo(f"[ERROR] Error: Invalid JSON in log file: {e}", err=True)
             raise typer.Exit(1)
         
-        # Handle both single event and array of events
-        events = log_data if isinstance(log_data, list) else [log_data]
+        # Categorize events
+        event_types = {}
+        spans = set()
+        
+        for event in events:
+            event_type = event.get("event_type", "unknown")
+            event_types[event_type] = event_types.get(event_type, 0) + 1
+            
+            span_id = event.get("span_id")
+            if span_id:
+                spans.add(span_id)
+        
+        # Extract metadata
+        session_id = events[0].get("session_id", "unknown") if events else "unknown"
+        log_hash = hashlib.sha256(canonical_log_bytes).hexdigest()
         
         typer.echo(f"\n{'='*60}")
         typer.echo(f"{'Canonical Log Metadata':<30}")
@@ -303,20 +464,11 @@ def extract(
             first_event = events[0]
             last_event = events[-1]
             
-            session_id = first_event.get("session_id", "unknown")
             typer.echo(f"Session ID:        {session_id}")
             typer.echo(f"Event Count:       {len(events)}")
-            typer.echo(f"File Size:         {len(canonical_log):,} bytes")
-            
-            # Compute hash
-            log_hash = hashlib.sha256(canonical_log).hexdigest()
+            typer.echo(f"Span Count:        {len(spans)}")
+            typer.echo(f"File Size:         {len(canonical_log_bytes):,} bytes")
             typer.echo(f"SHA-256 Hash:      {log_hash}")
-            
-            # Event types
-            event_types = {}
-            for event in events:
-                et = event.get("event_type", "unknown")
-                event_types[et] = event_types.get(et, 0) + 1
             
             typer.echo(f"\nEvent Types:")
             for et, count in sorted(event_types.items()):
@@ -340,6 +492,7 @@ def extract(
         logger.exception("extract_metadata_failed", error=str(e))
         typer.echo(f"[ERROR] Error: {e}", err=True)
         raise typer.Exit(1)
+
 
 
 @app.command()
@@ -594,7 +747,7 @@ def get_workflow(
         
         # Show file paths
         typer.echo(f"\n{typer.style('Files:', bold=True)}")
-        typer.echo(f"  Canonical Log: {workflow_dir / 'canonical_log.jsonl'}")
+        typer.echo(f"  Canonical Log: {workflow_dir / 'canonical_log.json'}")
         typer.echo(f"  Metadata: {metadata_path}")
         typer.echo(f"  Commitments: {commitments_path}")
         
@@ -605,7 +758,7 @@ def get_workflow(
         typer.echo(f"    .\\venv\\Scripts\\Activate.ps1; python -m src.tools.verify_cli verify-by-id {session_id}")
         if session_root:
             typer.echo(f"\n  {typer.style('Alternative (by file path):', dim=True)}")
-            canonical_log = workflow_dir / 'canonical_log.jsonl'
+            canonical_log = workflow_dir / 'canonical_log.json'
             typer.echo(f'    .\\venv\\Scripts\\Activate.ps1; python -m src.tools.verify_cli verify "{canonical_log}" \'{session_root}\'')
         
         typer.echo()
@@ -664,7 +817,7 @@ def verify_by_id(
             raise typer.Exit(1)
         
         # Get canonical log path
-        canonical_log_path = workflow_dir / "canonical_log.jsonl"
+        canonical_log_path = workflow_dir / "canonical_log.json"
         if not canonical_log_path.exists():
             typer.echo(f"[ERROR] Canonical log not found: {canonical_log_path}", err=True)
             raise typer.Exit(1)
@@ -677,7 +830,7 @@ def verify_by_id(
         
         # Perform verification (reuse existing verify logic)
         with open(canonical_log_path, "r", encoding="utf-8") as f:
-            canonical_log = f.read()
+            canonical_log_text = f.read()
         
         try:
             expected_root = base64.b64decode(session_root)
@@ -685,35 +838,183 @@ def verify_by_id(
             typer.echo(f"[ERROR] Error: Invalid Base64 root: {e}", err=True)
             raise typer.Exit(1)
         
-        typer.echo(f"[OK] Loaded canonical log ({len(canonical_log):,} bytes)")
+        typer.echo(f"[OK] Loaded canonical log ({len(canonical_log_text):,} bytes)")
+        
+        # Parse JSONL or JSON format
+        events = []
+        span_commitments = {}
+        span_names = {}  # Extract span names from canonical log
         
         try:
-            log_data = json.loads(canonical_log)
+            data = json.loads(canonical_log_text)
+            if isinstance(data, list):
+                # JSON array format - only regular events (no span_commitment events)
+                events = [e for e in data if e.get("event_type") != "span_commitment"]
+                # Extract span_names from events
+                for event in events:
+                    span_id = event.get("span_id")
+                    span_name = event.get("span_name")
+                    if span_id and span_name and span_id not in span_names:
+                        span_names[span_id] = span_name
+            else:
+                # Single JSON object
+                events = [data] if data.get("event_type") != "span_commitment" else []
+                if events:
+                    span_id = data.get("span_id")
+                    span_name = data.get("span_name")
+                    if span_id and span_name:
+                        span_names[span_id] = span_name
         except json.JSONDecodeError as e:
             typer.echo(f"[ERROR] Error: Invalid JSON in log file: {e}", err=True)
             raise typer.Exit(1)
         
-        events = log_data if isinstance(log_data, list) else [log_data]
-        typer.echo(f"[OK] Parsed {len(events)} events from log")
+        # Load span roots from commitments.json (separate file)
+        log_dir = Path(canonical_log_path).parent
+        commitments_path = log_dir / "commitments.json"
+        span_commitments = {}
+        
+        if commitments_path.exists():
+            try:
+                with open(commitments_path, "r") as f:
+                    commitments_data = json.load(f)
+                    for span_id, span_root_b64 in commitments_data.get("span_roots", {}).items():
+                        span_commitments[span_id] = {
+                            "span_root": span_root_b64,
+                            "span_name": span_names.get(span_id, span_id)  # Get name from canonical log
+                        }
+                    if verbose:
+                        typer.echo(f"[OK] Loaded {len(span_commitments)} span roots from commitments.json")
+            except Exception as e:
+                typer.echo(f"[WARNING] Could not load commitments.json: {e}", err=True)
+        
+        typer.echo(f"[OK] Parsed {len(events)} events + {len(span_commitments)} span commitments from log")
         
         if show_protocol:
             app_events, protocol_events = categorize_events(events)
             print_event_breakdown(app_events, protocol_events)
         
-        typer.echo("Verifying Verkle tree root...")
+        # Group events by span and reconstruct per-span trees
+        if verbose:
+            typer.echo("\nGrouping events by span...")
         
-        accumulator = VerkleAccumulator(session_id)
+        events_by_span = {}
         for event in events:
+            span_id = event.get("span_id", "unknown")
+            if span_id not in events_by_span:
+                events_by_span[span_id] = []
+            events_by_span[span_id].append(event)
+        
+        if verbose:
+            typer.echo(f"  Found {len(events_by_span)} unique spans")
+        
+        # Reconstruct per-span Verkle trees
+        if verbose:
+            typer.echo("\nVerifying per-span Verkle roots...")
+        
+        span_roots = {}
+        
+        for span_id, span_events in events_by_span.items():
+            if verbose:
+                typer.echo(f"  Span: {span_id}")
+            
+            # Initialize accumulator with proper ID format (session_id + span_id) to match recording
+            accumulator = VerkleAccumulator(f"{session_id}_{span_id}")
+            
             try:
-                accumulator.add_event(event)
+                for i, event in enumerate(span_events):
+                    # Reconstruct verification event with ONLY core fields (not metadata)
+                    # Use 0-indexed position within span as the counter
+                    # Extract attributes from canonical_log (matches storage structure)
+                    attributes = event.get("attributes")  # From canonical_log.json structure
+                    
+                    # Only include core event fields - NO signature/signer_id (they're not hashed)
+                    verification_event = {
+                        "session_id": event.get("session_id"),
+                        "counter": i,  # Per-span counter: 0, 1, 2...
+                        "timestamp": event.get("timestamp"),  # Use stored timestamp, not new one
+                        "event_type": event.get("event_type"),
+                        "payload": attributes,  # Merkle accumulator field (from canonical attributes)
+                        "span_id": event.get("span_id"),
+                    }
+                    
+                    accumulator.add_event(verification_event)
+                    if verbose and (i + 1) % max(1, len(span_events) // 5) == 0:
+                        typer.echo(f"    Processed {i + 1}/{len(span_events)} events...")
             except Exception as e:
-                typer.echo(f"[ERROR] Error processing event: {e}", err=True)
+                typer.echo(f"[ERROR] Error processing event {i} in span {span_id}: {e}", err=True)
+                raise typer.Exit(1)
+            
+            try:
+                span_root = accumulator.finalize()
+                span_roots[span_id] = span_root
+                
+                if verbose:
+                    span_root_b64 = base64.b64encode(span_root).decode()
+                    typer.echo(f"    Computed root: {span_root_b64[:20]}...")
+            except Exception as e:
+                typer.echo(f"[ERROR] Error finalizing Verkle tree for span {span_id}: {e}", err=True)
+                raise typer.Exit(1)
+        
+        # Verify span commitments
+        if verbose:
+            typer.echo("\nVerifying span commitments...")
+        
+        all_spans_valid = True
+        for span_id, commitment in span_commitments.items():
+            if span_id in span_roots:
+                expected_span_root_b64 = commitment.get("span_root")
+                if expected_span_root_b64:
+                    try:
+                        expected_span_root = base64.b64decode(expected_span_root_b64)
+                        computed_span_root = span_roots[span_id]
+                        
+                        if computed_span_root == expected_span_root:
+                            if verbose:
+                                typer.echo(f"  [OK] Span {span_id}: root matches")
+                        else:
+                            typer.echo(f"[ERROR] Span {span_id}: root mismatch", err=True)
+                            all_spans_valid = False
+                    except Exception as e:
+                        typer.echo(f"[ERROR] Error verifying span {span_id}: {e}", err=True)
+                        raise typer.Exit(1)
+        
+        if not all_spans_valid:
+            typer.echo(f"\n[ERROR] Verification FAILED: span root mismatch [ERROR]", err=True)
+            raise typer.Exit(1)
+        
+        # Reconstruct session root from span roots
+        if verbose:
+            typer.echo("\nReconstructing session root from span roots...")
+        
+        session_accumulator = VerkleAccumulator(session_id)
+        
+        # Add span roots to session accumulator in sorted order
+        # Must match exactly how recording does it in _finalize_current_span
+        session_counter = 0
+        for span_id in sorted(span_roots.keys()):
+            span_root = span_roots[span_id]
+            
+            # Reconstruct span commitment event exactly as recorded
+            span_event = {
+                "session_id": session_id,
+                "counter": session_counter,  # Session-level span commitment counter
+                "event_type": "span_commitment",
+                "span_id": span_id,
+                "span_name": span_commitments.get(span_id, {}).get("span_name", span_id),
+                "span_root": base64.b64encode(span_root).decode(),  # Direct field, not in attributes
+                "event_count": 1,  # This span had events (since we only process non-empty spans)
+            }
+            session_counter += 1
+            try:
+                session_accumulator.add_event(span_event)
+            except Exception as e:
+                typer.echo(f"[ERROR] Error adding span root for {span_id}: {e}", err=True)
                 raise typer.Exit(1)
         
         try:
-            computed_root = accumulator.finalize()
+            computed_root = session_accumulator.finalize()
         except Exception as e:
-            typer.echo(f"[ERROR] Error finalizing Verkle tree: {e}", err=True)
+            typer.echo(f"[ERROR] Error finalizing session Verkle tree: {e}", err=True)
             raise typer.Exit(1)
         
         if computed_root == expected_root:
