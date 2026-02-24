@@ -205,6 +205,14 @@ def verify(
         
         typer.echo(f"[OK] Parsed {len(events)} events from canonical log")
         
+        # Extract span_names from events
+        span_names = {}
+        for event in events:
+            span_id = event.get("span_id")
+            span_name = event.get("span_name")
+            if span_id and span_name and span_id not in span_names:
+                span_names[span_id] = span_name
+        
         # Load commitments to get expected span roots
         log_dir = Path(canonical_log_path).parent
         commitments_path = log_dir / "commitments.json"
@@ -214,7 +222,13 @@ def verify(
             try:
                 with open(commitments_path, "r") as f:
                     commitments_data = json.load(f)
-                    span_commitments = commitments_data.get("span_roots", {})
+                    span_roots_data = commitments_data.get("span_roots", {})
+                    # Transform to dict with span_root and span_name
+                    for span_id, span_root_b64 in span_roots_data.items():
+                        span_commitments[span_id] = {
+                            "span_root": span_root_b64,
+                            "span_name": span_names.get(span_id, span_id)
+                        }
                     if verbose:
                         typer.echo(f"[OK] Loaded {len(span_commitments)} span commitments from commitments.json")
             except Exception as e:
@@ -301,23 +315,25 @@ def verify(
             typer.echo("\nVerifying span commitments...")
         
         all_spans_valid = True
-        for span_id, expected_span_root_b64 in span_commitments.items():
+        for span_id, commitment in span_commitments.items():
             if span_id in span_roots:
-                try:
-                    expected_span_root = base64.b64decode(expected_span_root_b64)
-                    computed_span_root = span_roots[span_id]
-                    
-                    if computed_span_root == expected_span_root:
-                        if verbose:
-                            typer.echo(f"  [OK] Span {span_id}: root matches")
-                    else:
-                        typer.echo(f"[ERROR] Span {span_id}: root mismatch", err=True)
-                        typer.echo(f"    Expected: {expected_span_root_b64[:30]}...", err=True)
-                        typer.echo(f"    Computed: {base64.b64encode(computed_span_root).decode()[:30]}...", err=True)
-                        all_spans_valid = False
-                except Exception as e:
-                    typer.echo(f"[ERROR] Error verifying span {span_id}: {e}", err=True)
-                    raise typer.Exit(1)
+                expected_span_root_b64 = commitment.get("span_root")
+                if expected_span_root_b64:
+                    try:
+                        expected_span_root = base64.b64decode(expected_span_root_b64)
+                        computed_span_root = span_roots[span_id]
+                        
+                        if computed_span_root == expected_span_root:
+                            if verbose:
+                                typer.echo(f"  [OK] Span {span_id}: root matches")
+                        else:
+                            typer.echo(f"[ERROR] Span {span_id}: root mismatch", err=True)
+                            typer.echo(f"    Expected: {expected_span_root_b64[:30]}...", err=True)
+                            typer.echo(f"    Computed: {base64.b64encode(computed_span_root).decode()[:30]}...", err=True)
+                            all_spans_valid = False
+                    except Exception as e:
+                        typer.echo(f"[ERROR] Error verifying span {span_id}: {e}", err=True)
+                        raise typer.Exit(1)
         
         if not all_spans_valid:
             typer.echo(f"\n[ERROR] Verification FAILED: span root mismatch [ERROR]", err=True)
