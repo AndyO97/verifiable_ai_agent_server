@@ -715,11 +715,8 @@ class AIAgent:
             }
             self.integrity.record_model_output(final_output, metadata=output_metadata)
         
-        # Start a final span to finalize all previous spans
-        # This ensures the last turn span gets finalized
-        final_span_id = self.integrity.start_span("agent_finalize")
-        
-        # Finalize and commit (this finalizes the last span and creates session root)
+        # Finalize and commit (this finalizes the current span and creates session root)
+        # NOTE: Do NOT create an empty agent_finalize span - only commit non-empty spans
         session_root, commitments, canonical_log_bytes = self.integrity.finalize()
         
         # Build MCP 2024-11 compliant response
@@ -907,12 +904,8 @@ class AIAgent:
             }
             self.integrity.record_model_output(final_output, metadata=output_metadata)
         
-        # Start a final span to finalize all previous spans
-        # This ensures the last turn span gets finalized
-        final_span_id = self.integrity.start_span("agent_finalize")
-        
-        # Finalize and commit (this finalizes the last span and creates session root)
-        # IMPORTANT: This is identical to synchronous run() - produces same commitments
+        # Finalize and commit (this finalizes the current span and creates session root)
+        # NOTE: Do NOT create an empty agent_finalize span - only commit non-empty spans
         session_root, commitments, canonical_log_bytes = self.integrity.finalize()
         
         # Build MCP 2024-11 compliant response

@@ -270,7 +270,7 @@ def run_real_agent_workflow() -> None:
     integrity_middleware.save_to_local_storage(workflow_dir)
     
     # Copy canonical log to root for convenient verification
-    canonical_log_path = workflow_dir / "canonical_log.jsonl"
+    canonical_log_path = workflow_dir / "canonical_log.json"
     if canonical_log_path.exists():
         shutil.copy(canonical_log_path, log_file)
     

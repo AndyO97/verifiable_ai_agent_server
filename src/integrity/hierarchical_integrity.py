@@ -95,6 +95,10 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
         # Track events by span
         self.events_by_span: Dict[str, list] = {}
         
+        # Canonical events list (for JSONL export with full event data + span commitments)
+        # Each event includes: timestamp, span_id, attributes (for OTel compliance)
+        self.canonical_events: list[dict[str, Any]] = []
+        
         # Track current LLM context for generation recording
         self._current_prompt: Optional[str] = None
         self._current_model: Optional[str] = None
@@ -152,6 +156,48 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
             )
         
         return self.trace_id
+    
+    def _create_canonical_event(
+        self,
+        event_type: str,
+        attributes: dict[str, Any],
+        timestamp: str,
+        signature: str = "",
+        signer_id: str = "server"
+    ) -> dict[str, Any]:
+        """
+        Create an OTel-compliant event for the canonical log.
+        
+        OTel Structure (OpenTelemetry compliant - RFC 3339 timestamps):
+        {
+            "counter": global session counter (0, 1, 2, ... for ordering),
+            "timestamp": ISO8601 UTC (OTel standard),
+            "event_type": type of event,
+            "span_id": which span this belongs to,
+            "span_name": human-readable span name (OTel attribute),
+            "attributes": event-specific data (OTel standard field for event data),
+            "signature": cryptographic signature,
+            "signer_id": who created this event,
+            "session_id": session identifier
+        }
+        
+        NOTE: 
+        - Only ONE field for event data: 'attributes' (OTel standard)
+        - span_counter is NOT stored (redundant) - computed during verification as position within span
+        - Verification reconstruction uses 'attributes' as the payload for Verkle computation
+        - timestamp parameter must be passed in (from IntegrityEvent) to ensure consistency
+        """
+        return {
+            "counter": self.counter,
+            "timestamp": timestamp,
+            "event_type": event_type,
+            "span_id": self.current_span_id,
+            "span_name": self.spans[self.current_span_id].name if self.current_span_id in self.spans else None,
+            "attributes": attributes,  # OTel standard field - single source of truth for event data
+            "signature": signature,
+            "signer_id": signer_id,
+            "session_id": self.session_id,
+        }
     
     def start_span(self, span_name: str) -> str:
         """
@@ -244,12 +290,28 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
         
         # Add to span accumulator if span is active
         if self.current_span_id and self.current_span_accumulator:
-            span_event_dict = asdict(event)
-            span_event_dict["span_id"] = self.current_span_id
-            span_event_dict["counter"] = self.current_span_counter
+            # Only include core event fields (not metadata like signature/signer_id)
+            span_event_dict = {
+                "session_id": event.session_id,
+                "counter": self.current_span_counter,  # Per-span position
+                "timestamp": event.timestamp,
+                "event_type": event.event_type,
+                "payload": event.payload,
+                "span_id": self.current_span_id,
+            }
             self.current_span_accumulator.add_event(span_event_dict)
             self.current_span_counter += 1
             self.events_by_span[self.current_span_id].append(event_dict)
+        
+        # Add to canonical events (OTel-compliant format for auditing)
+        canonical_event = self._create_canonical_event(
+            event_type="prompt",
+            attributes=payload,
+            timestamp=event.timestamp,
+            signature=signature,
+            signer_id=signer_id
+        )
+        self.canonical_events.append(canonical_event)
         
         self.counter += 1
         
@@ -300,12 +362,28 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
         
         # Add to span accumulator if span is active
         if self.current_span_id and self.current_span_accumulator:
-            span_event_dict = asdict(event)
-            span_event_dict["span_id"] = self.current_span_id
-            span_event_dict["counter"] = self.current_span_counter
+            # Only include core event fields (not metadata like signature/signer_id)
+            span_event_dict = {
+                "session_id": event.session_id,
+                "counter": self.current_span_counter,  # Per-span position
+                "timestamp": event.timestamp,
+                "event_type": event.event_type,
+                "payload": event.payload,
+                "span_id": self.current_span_id,
+            }
             self.current_span_accumulator.add_event(span_event_dict)
             self.current_span_counter += 1
             self.events_by_span[self.current_span_id].append(event_dict)
+        
+        # Add to canonical events (OTel-compliant format for auditing)
+        canonical_event = self._create_canonical_event(
+            event_type="model_output",
+            attributes=payload,
+            timestamp=event.timestamp,
+            signature=signature,
+            signer_id=signer_id
+        )
+        self.canonical_events.append(canonical_event)
         
         self.counter += 1
         
@@ -436,12 +514,28 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
         self.accumulator.add_event(event_dict)
         
         if self.current_span_id and self.current_span_accumulator:
-            span_event_dict = asdict(event)
-            span_event_dict["span_id"] = self.current_span_id
-            span_event_dict["counter"] = self.current_span_counter
+            # Only include core event fields (not metadata like signature/signer_id)
+            span_event_dict = {
+                "session_id": event.session_id,
+                "counter": self.current_span_counter,  # Per-span position
+                "timestamp": event.timestamp,
+                "event_type": event.event_type,
+                "payload": event.payload,
+                "span_id": self.current_span_id,
+            }
             self.current_span_accumulator.add_event(span_event_dict)
             self.current_span_counter += 1
             self.events_by_span[self.current_span_id].append(event_dict)
+        
+        # Add to canonical events (OTel-compliant format for auditing)
+        canonical_event = self._create_canonical_event(
+            event_type="tool_input",
+            attributes=payload,
+            timestamp=event.timestamp,
+            signature=signature,
+            signer_id=signer_id
+        )
+        self.canonical_events.append(canonical_event)
         
         self.counter += 1
         
@@ -478,12 +572,28 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
         self.accumulator.add_event(event_dict)
         
         if self.current_span_id and self.current_span_accumulator:
-            span_event_dict = asdict(event)
-            span_event_dict["span_id"] = self.current_span_id
-            span_event_dict["counter"] = self.current_span_counter
+            # Only include core event fields (not metadata like signature/signer_id)
+            span_event_dict = {
+                "session_id": event.session_id,
+                "counter": self.current_span_counter,  # Per-span position
+                "timestamp": event.timestamp,
+                "event_type": event.event_type,
+                "payload": event.payload,
+                "span_id": self.current_span_id,
+            }
             self.current_span_accumulator.add_event(span_event_dict)
             self.current_span_counter += 1
             self.events_by_span[self.current_span_id].append(event_dict)
+        
+        # Add to canonical events (OTel-compliant format for auditing)
+        canonical_event = self._create_canonical_event(
+            event_type="tool_output",
+            attributes=payload,
+            timestamp=event.timestamp,
+            signature=signature,
+            signer_id=signer_id
+        )
+        self.canonical_events.append(canonical_event)
         
         self.counter += 1
         
@@ -519,15 +629,32 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
         
         self.accumulator.add_event(event_dict)
         
-        span_event_dict = asdict(event)
-        span_event_dict["span_id"] = self.current_span_id
-        span_event_dict["counter"] = self.current_span_counter
+        # Only include core event fields (not metadata like signature/signer_id)
+        span_event_dict = {
+            "session_id": self.session_id,
+            "counter": self.current_span_counter,  # Per-span position
+            "timestamp": event.timestamp,  # Use IntegrityEvent timestamp, not new one
+            "event_type": event_type,
+            "payload": payload,
+            "span_id": self.current_span_id,
+        }
         self.current_span_accumulator.add_event(span_event_dict)
         
         self.events_by_span[self.current_span_id].append(event_dict)
         
-        self.counter += 1
+        # Add to canonical events (OTel-compliant format for auditing)
+        # Use _create_canonical_event to ensure consistent structure with no duplicates
+        canonical_event = self._create_canonical_event(
+            event_type=event_type,
+            attributes=payload,  # OTel standard: single field for event data
+            timestamp=event.timestamp,  # Use IntegrityEvent timestamp
+            signature=signature,
+            signer_id=signer_id
+        )
+        self.canonical_events.append(canonical_event)
+        
         self.current_span_counter += 1
+        self.counter += 1
         
         return str(self.counter - 1)
     
@@ -550,7 +677,7 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
              datetime.fromisoformat(span.start_time)).total_seconds() * 1000
         )
         
-        # Add span root to session accumulator
+        # Add span root to session accumulator (for session root computation)
         span_commitment_event = {
             "session_id": self.session_id,
             "counter": self.session_accumulator_counter,
@@ -710,13 +837,18 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
         """Save all data to local storage with hierarchical structure"""
         base_dir.mkdir(parents=True, exist_ok=True)
         
-        # Save canonical log
-        canonical_log = self.session_accumulator.get_canonical_log()
-        log_path = base_dir / "canonical_log.jsonl"
-        if isinstance(canonical_log, bytes):
-            log_path.write_bytes(canonical_log)
-        else:
-            log_path.write_text(canonical_log)
+        # Save canonical log as JSON array with full event data (for auditing)
+        # Includes both actual events AND span_commitment events
+        # Format: Standard JSON array (OTel-compliant), not JSONL
+        log_path = base_dir / "canonical_log.json"
+        with open(log_path, 'w') as f:
+            f.write(json.dumps(self.canonical_events, indent=2))
+        
+        # Compute canonical log hash for verification
+        # Use compact form for hash (no whitespace) for determinism
+        canonical_log_text = json.dumps(self.canonical_events, separators=(',', ':'), sort_keys=True)
+        canonical_log_bytes = canonical_log_text.encode('utf-8')
+        canonical_log_hash = hashlib.sha256(canonical_log_bytes).hexdigest()
         
         # Save spans structure
         spans_data = {span_id: asdict(span_meta) for span_id, span_meta in self.spans.items()}
@@ -727,7 +859,9 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
         commitments_path = base_dir / "commitments.json"
         commitments_data = {
             "session_root": self.session_accumulator.get_root_b64() if self.finalized else None,
+            "event_accumulator_root": self.accumulator.get_root_b64() if self.finalized else None,
             "span_roots": self.span_roots,
+            "canonical_log_hash": canonical_log_hash,
         }
         commitments_path.write_text(json.dumps(commitments_data, indent=2))
         
@@ -738,11 +872,9 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
             "timestamp": self._get_server_timestamp(),
             "event_count": self.counter,
             "span_count": len(self.spans),
-            "log_hash": hashlib.sha256(
-                self.session_accumulator.get_canonical_log()
-                if isinstance(self.session_accumulator.get_canonical_log(), bytes)
-                else self.session_accumulator.get_canonical_log().encode('utf-8')
-            ).hexdigest(),
+            "log_hash": canonical_log_hash,
+            "otel_compliant": True,
+            "format": "JSONL with OTel-style events",
         }
         metadata_path.write_text(json.dumps(metadata, indent=2))
         
