@@ -4,7 +4,7 @@ Real-World Demo: Live LLM Agent with MCP Protocol using AIAgent Class
 =====================================================================
 
 This script demonstrates a REAL agent workflow with full MCP 2024-11 compliance:
-1. User sends a prompt through AIAgent to OpenRouter API
+1. User sends a prompt through AIAgent to configured LLM provider (Ollama or OpenRouter)
 2. LLM provides genuine response
 3. All communication in proper format
 4. Full protocol versioning and initialization
@@ -70,7 +70,6 @@ DIM = "\033[2m"
 # Import project modules
 from src.integrity import HierarchicalVerkleMiddleware
 from src.agent import MCPServer, AIAgent, AgentResponse
-from src.llm import OpenRouterClient
 
 
 def print_header(title: str) -> None:
@@ -108,18 +107,12 @@ def run_real_agent_workflow() -> None:
     
     # Load environment
     load_dotenv()
-    api_key = os.getenv("OPENROUTER_API_KEY")
-    model = os.getenv("OPENROUTER_MODEL", "arcee-ai/trinity-large-preview:free")
-    
-    if not api_key:
-        print(f"{RED}✗ Error: OPENROUTER_API_KEY not set in .env file{RESET}")
-        print(f"{CYAN}Get a free key at: https://openrouter.ai/keys{RESET}")
-        return
+    provider = os.getenv("LLM_PROVIDER", "ollama").lower()
     
     print_header("REAL-TIME AI AGENT WORKFLOW WITH MCP 2024-11 + INTEGRITY TRACKING")
     
     print(f"""{CYAN}This is a REAL agent interaction with full MCP protocol compliance:
-  - User sends prompt through AIAgent to OpenRouter API
+  - User sends prompt through AIAgent to LLM provider ({provider})
   - LLM provides genuine response
   - All communication in MCP 2024-11 format
   - Full protocol versioning and initialization
@@ -144,21 +137,22 @@ def run_real_agent_workflow() -> None:
         print(f"{GREEN}[OK] Langfuse tracing enabled (traces at http://localhost:3000){RESET}")
     else:
         print(f"{YELLOW}[INFO] Langfuse not available (optional - continuing without observability){RESET}")
-    print(f"{GREEN}[OK] Session ID: {session_id}{RESET}")
-    print(f"{GREEN}[OK] Model: {model}{RESET}\n")
+    print(f"{GREEN}[OK] Session ID: {session_id}{RESET}\n")
     
-    # STEP 2: Initialize OpenRouter LLM client
+    # STEP 2: Initialize LLM client via factory
     print_subheader("STEP 2: Initialize LLM Client")
     
     try:
-        llm_client = OpenRouterClient(api_key=api_key, model=model)
+        llm_client = AIAgent.create_llm_client()
+        model = getattr(llm_client, 'model', 'unknown')
+        print(f"{GREEN}[OK] LLM client initialized (provider: {provider}, model: {model}){RESET}")
         is_healthy = llm_client.health_check()
         if is_healthy:
-            print(f"{GREEN}[OK] OpenRouter LLM client connected{RESET}\n")
+            print(f"{GREEN}[OK] LLM health check passed{RESET}\n")
         else:
-            print(f"{YELLOW}[WARNING] OpenRouter health check failed, continuing anyway{RESET}\n")
+            print(f"{YELLOW}[WARNING] LLM health check failed, continuing anyway{RESET}\n")
     except Exception as e:
-        print(f"{RED}[ERROR] Failed to initialize OpenRouter client: {e}{RESET}")
+        print(f"{RED}[ERROR] Failed to initialize LLM client: {e}{RESET}")
         return
     
     # Create AI Agent
@@ -180,9 +174,9 @@ def run_real_agent_workflow() -> None:
     print(f"{GREEN}[OK] User prompt recorded{RESET}\n")
     
     # STEP 4: Run Agent (handles LLM call and integrity tracking)
-    print_subheader("STEP 4: Making REAL OpenRouter API Call via AIAgent")
+    print_subheader("STEP 4: Making REAL LLM API Call via AIAgent")
     
-    print(f"{CYAN}Sending request to OpenRouter...{RESET}")
+    print(f"{CYAN}Sending request to {provider} LLM...{RESET}")
     print(f"{DIM}Prompt: {user_prompt}{RESET}\n")
     
     result = agent.run(prompt=user_prompt, max_turns=1)
@@ -200,7 +194,7 @@ def run_real_agent_workflow() -> None:
     llm_response_text = result_dict['output']
     print_event("LLM_RESPONSE", llm_response_text, MAGENTA)
     
-    print(f"{BOLD}Response from OpenRouter:{RESET}")
+    print(f"{BOLD}Response from LLM ({provider}):{RESET}")
     print(f"{CYAN}{llm_response_text}{RESET}\n")
     
     print(f"{GREEN}[OK] LLM response received and recorded{RESET}\n")
@@ -255,7 +249,7 @@ def run_real_agent_workflow() -> None:
   - Overall Status: {GREEN}[OK] ALL CHECKS PASSED{RESET}
 
 {BOLD}What This Proves:{RESET}
-  - OpenRouter returned this exact response at this time
+  - The LLM returned this exact response at this time
   - User asked this exact question
   - All communication followed MCP 2024-11 specification
   - No tampering occurred
@@ -323,7 +317,7 @@ def run_real_agent_workflow() -> None:
     print_header("[COMPLETE] HIERARCHICAL VERKLE DEMO COMPLETE")
     
     print(f"""{GREEN}Summary:{RESET}
-  - Made REAL OpenRouter API call using AIAgent with MCP 2024-11
+  - Made REAL LLM API call using AIAgent with MCP 2024-11
   - Received genuine LLM response
   - Organized into {len(integrity_middleware.spans)} hierarchical spans
   - All communication via MCP 2024-11

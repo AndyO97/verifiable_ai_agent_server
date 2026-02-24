@@ -352,6 +352,8 @@ def verify(
             span_root = span_roots[span_id]
             
             # Reconstruct span commitment event exactly as recorded
+            # event_count must match the actual number of events in the span
+            span_event_count = len(events_by_span.get(span_id, []))
             span_event = {
                 "session_id": session_id,
                 "counter": session_counter,  # Session-level span commitment counter
@@ -359,7 +361,7 @@ def verify(
                 "span_id": span_id,
                 "span_name": span_commitments.get(span_id, {}).get("span_name", span_id),
                 "span_root": base64.b64encode(span_root).decode(),  # Direct field, not in attributes
-                "event_count": 1,  # This span had events (since we only process non-empty spans)
+                "event_count": span_event_count,
             }
             session_counter += 1
             try:
@@ -995,6 +997,8 @@ def verify_by_id(
             span_root = span_roots[span_id]
             
             # Reconstruct span commitment event exactly as recorded
+            # event_count must match the actual number of events in the span
+            span_event_count = len(events_by_span.get(span_id, []))
             span_event = {
                 "session_id": session_id,
                 "counter": session_counter,  # Session-level span commitment counter
@@ -1002,7 +1006,7 @@ def verify_by_id(
                 "span_id": span_id,
                 "span_name": span_commitments.get(span_id, {}).get("span_name", span_id),
                 "span_root": base64.b64encode(span_root).decode(),  # Direct field, not in attributes
-                "event_count": 1,  # This span had events (since we only process non-empty spans)
+                "event_count": span_event_count,
             }
             session_counter += 1
             try:

@@ -67,7 +67,6 @@ DIM = "\033[2m"
 # Import project modules
 from src.integrity import HierarchicalVerkleMiddleware
 from src.agent import MCPServer, AIAgent, ToolDefinition, AgentResponse
-from src.llm import OpenRouterClient
 import math
 
 
@@ -179,13 +178,7 @@ def run_real_agent_workflow() -> None:
     
     # Load environment
     load_dotenv()
-    api_key = os.getenv("OPENROUTER_API_KEY")
-    model = os.getenv("OPENROUTER_MODEL", "arcee-ai/trinity-large-preview:free")
-    
-    if not api_key:
-        print(f"{RED}[ERROR] OPENROUTER_API_KEY not set in .env file{RESET}")
-        print(f"{CYAN}Get a free key at: https://openrouter.ai/keys{RESET}")
-        return
+    provider = os.getenv("LLM_PROVIDER", "ollama").lower()
     
     print_header("REAL-TIME AI AGENT WITH TOOL INVOCATION & INTEGRITY TRACKING")
     
@@ -247,18 +240,18 @@ def run_real_agent_workflow() -> None:
     
     print(f"{GREEN}[OK] MCPServer initialized with {len(mcp_server.tools)} tools{RESET}")
     print(f"{GREEN}[OK] Session ID: {session_id}{RESET}")
-    print(f"{GREEN}[OK] Model: {model}{RESET}\n")
     
-    # Initialize OpenRouter LLM client
+    # Initialize LLM client via factory (reads LLM_PROVIDER from .env)
     try:
-        llm_client = OpenRouterClient(api_key=api_key, model=model)
+        llm_client = AIAgent.create_llm_client()
+        model = llm_client.model
         is_healthy = llm_client.health_check()
         if is_healthy:
-            print(f"{GREEN}[OK] OpenRouter LLM client connected{RESET}\n")
+            print(f"{GREEN}[OK] LLM client connected ({provider}, model: {model}){RESET}\n")
         else:
-            print(f"{YELLOW}[WARNING] OpenRouter health check failed, continuing anyway{RESET}\n")
+            print(f"{YELLOW}[WARNING] LLM health check failed, continuing anyway{RESET}\n")
     except Exception as e:
-        print(f"{RED}[ERROR] Failed to initialize OpenRouter client: {e}{RESET}")
+        print(f"{RED}[ERROR] Failed to initialize LLM client: {e}{RESET}")
         return
     
     # Create AIAgent instance
@@ -269,7 +262,7 @@ def run_real_agent_workflow() -> None:
         llm_client=llm_client
     )
     
-    print(f"{GREEN}[OK] AIAgent initialized with OpenRouter{RESET}\n")
+    print(f"{GREEN}[OK] AIAgent initialized with {provider}{RESET}\n")
     
     # STEP 2: Run agent with tool invocation
     print_subheader("STEP 2: Run Agent with Multi-Turn Tool Invocation")
@@ -456,7 +449,7 @@ Then summarize the findings."""
     
     print(f"""{GREEN}Summary:{RESET}
   - Used AIAgent class for multi-turn LLM interactions with tool invocation
-  - Made REAL OpenRouter API call with MCP 2024-11 JSON-RPC 2.0 protocol
+  - Made REAL LLM API call ({provider}) with MCP 2024-11 JSON-RPC 2.0 protocol
   - Organized into {len(integrity_middleware.spans)} hierarchical spans
   - All tool invocations tracked in canonical log
   - Built hierarchical Verkle tree with per-span + session roots
@@ -478,7 +471,7 @@ Session Root: {session_root[:20] if session_root else 'N/A'}... uniquely identif
 Anyone can verify this at any time, even after the server is restarted.{RESET}
 """)
     
-    print(f"{GREEN}[OK] Agent executed {result['turns']} turn(s) with LLM: {model}{RESET}\n")
+    print(f"{GREEN}[OK] Agent executed {result['turns']} turn(s) with {provider} ({model}){RESET}\n")
 
 
 if __name__ == "__main__":

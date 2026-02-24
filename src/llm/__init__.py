@@ -65,7 +65,7 @@ class OllamaClient:
     def __init__(self, base_url: str = "http://localhost:11434", model: str = "llama2"):
         self.base_url = base_url
         self.model = model
-        self.endpoint = f"{base_url}/api/generate"
+        self.endpoint = f"{base_url}/api/chat"
         
         logger.info("ollama_client_initialized", model=model, base_url=base_url)
     
@@ -85,17 +85,22 @@ class OllamaClient:
     
     def call_llm(
         self,
-        prompt: str,
+        prompt: str = "",
         tools: Optional[list[dict[str, Any]]] = None,
+        messages: Optional[list[dict[str, str]]] = None,
         temperature: float = 0.7,
         max_tokens: int = 2000
     ) -> LLMResponse:
         """
-        Call Ollama LLM with prompt and optional tools
+        Call Ollama LLM with prompt and optional tools.
+        
+        Uses /api/chat endpoint for multi-turn conversation support.
         
         Args:
-            prompt: User prompt
+            prompt: User prompt (used if messages not provided)
             tools: List of tool definitions (schema)
+            messages: Full conversation history as list of {role, content} dicts.
+                      If provided, prompt is ignored and full history is sent.
             temperature: Model temperature (0-1)
             max_tokens: Maximum tokens in response
         
@@ -106,22 +111,35 @@ class OllamaClient:
         # Build system message with tool definitions if provided
         system_msg = self._build_system_message(tools)
         
-        # Prepare full prompt with system context
-        full_prompt = f"{system_msg}\n\nUser: {prompt}"
+        # Build messages array for /api/chat
+        if messages:
+            # Full conversation history provided — prepend system message
+            chat_messages = [{"role": "system", "content": system_msg}]
+            chat_messages.extend(messages)
+        else:
+            # Single prompt fallback
+            chat_messages = [
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": prompt}
+            ]
         
         try:
-            logger.info("ollama_call_start", model=self.model, prompt_len=len(prompt))
+            prompt_len = len(prompt) if prompt else sum(len(m.get("content", "")) for m in chat_messages)
+            logger.info("ollama_call_start", model=self.model, prompt_len=prompt_len, num_messages=len(chat_messages))
             
-            # Call Ollama
+            # Call Ollama /api/chat endpoint
             response = requests.post(
                 self.endpoint,
                 json={
                     "model": self.model,
-                    "prompt": full_prompt,
-                    "temperature": temperature,
-                    "stream": False
+                    "messages": chat_messages,
+                    "stream": False,
+                    "options": {
+                        "temperature": temperature,
+                        "num_predict": max_tokens,
+                    }
                 },
-                timeout=60
+                timeout=120
             )
             
             if response.status_code != 200:
@@ -142,12 +160,13 @@ class OllamaClient:
                 
                 raise RuntimeError(msg)
             
-            response_text = response.json().get("response", "")
+            data = response.json()
+            # /api/chat returns {"message": {"role": "assistant", "content": "..."}}
+            response_text = data.get("message", {}).get("content", "")
             
             logger.info("ollama_call_complete", response_len=len(response_text))
             
-            # Parse tool calls if present (Ollama doesn't have native tool calling,
-            # so we look for structured tool calls in the response)
+            # Parse tool calls if present (regex-based since we use text-based tool calling)
             tool_calls = self._parse_tool_calls(response_text, tools)
             
             return LLMResponse(
@@ -283,8 +302,9 @@ class OpenRouterClient:
     
     def call_llm(
         self,
-        prompt: str,
+        prompt: str = "",
         tools: Optional[list[dict[str, Any]]] = None,
+        messages: Optional[list[dict[str, str]]] = None,
         temperature: float = 0.7,
         max_tokens: int = 2000
     ) -> LLMResponse:
@@ -292,8 +312,10 @@ class OpenRouterClient:
         Call OpenRouter LLM with prompt and optional tools
         
         Args:
-            prompt: User prompt
+            prompt: User prompt (used if messages not provided)
             tools: List of tool definitions (schema)
+            messages: Full conversation history as list of {role, content} dicts.
+                      If provided, prompt is ignored and full history is sent.
             temperature: Model temperature (0-1)
             max_tokens: Maximum tokens in response
         
@@ -305,15 +327,25 @@ class OpenRouterClient:
         system_msg = self._build_system_message(tools)
         
         try:
-            logger.info("openrouter_call_start", model=self.model, prompt_len=len(prompt))
+            prompt_len = len(prompt) if prompt else sum(len(m.get("content", "")) for m in (messages or []))
+            logger.info("openrouter_call_start", model=self.model, prompt_len=prompt_len)
+            
+            # Build messages array
+            if messages:
+                # Full conversation history provided — prepend system message
+                chat_messages = [{"role": "system", "content": system_msg}]
+                chat_messages.extend(messages)
+            else:
+                # Single prompt fallback
+                chat_messages = [
+                    {"role": "system", "content": system_msg},
+                    {"role": "user", "content": prompt}
+                ]
             
             # Prepare OpenAI-compatible request
             payload = {
                 "model": self.model,
-                "messages": [
-                    {"role": "system", "content": system_msg},
-                    {"role": "user", "content": prompt}
-                ],
+                "messages": chat_messages,
                 "temperature": temperature,
                 "max_tokens": max_tokens
             }

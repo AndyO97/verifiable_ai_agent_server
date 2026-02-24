@@ -124,9 +124,20 @@ async def main():
                 Result from remote tool as string
             """
             try:
+                # Generate unique request ID for anti-replay binding
+                request_id = str(uuid.uuid4())
                 # Make actual call to remote tool via secure ECDH-AES256-GCM channel
-                result = await client.call_tool("remote_calc", {"expression": expression})
-                return str(result)
+                # call_tool(args: dict, request_id: str)
+                resp = await client.call_tool({"expression": expression}, request_id)
+                tool_result = resp.get("result", {})
+                # Extract the clean numeric result for the LLM
+                if isinstance(tool_result, dict):
+                    if "error" in tool_result:
+                        return f"Error: {tool_result['error']}"
+                    value = tool_result.get("result", tool_result)
+                    expr = tool_result.get("expression", expression)
+                    return f"{expr} = {value}"
+                return str(tool_result)
             except Exception as e:
                 return f"Error calling remote tool: {str(e)}"
         
@@ -134,8 +145,22 @@ async def main():
         # The async handler will be properly awaited by AIAgent.run_async()
         mcp_server.register_tool(ToolDefinition(
             name=TOOL_NAME,
-            description="Remote calculation tool accessed via secure WebSocket connection with ECDH-AES256-GCM encryption",
-            input_schema={"expression": str},
+            description=(
+                "Remote calculator tool connected via secure WebSocket (ECDH-AES256-GCM encrypted). "
+                "Accepts a mathematical expression string and returns the numeric result. "
+                "Supports: +, -, *, /, and parentheses. "
+                'Example: {"expression": "2048 + 512 - 256"} returns {"result": 2304}.'
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "expression": {
+                        "type": "string",
+                        "description": "Mathematical expression to evaluate, e.g. '2048 + 512 - 256'"
+                    }
+                },
+                "required": ["expression"]
+            },
             handler=remote_calc_wrapper
         ))
         
@@ -144,21 +169,15 @@ async def main():
         # STEP 4: Initialize AIAgent with Remote Tools
         print_subheader("STEP 4: Initialize AIAgent with Remote Tools")
         
-        # Initialize LLM client
-        from src.llm import OpenRouterClient
+        # Initialize LLM client via factory (supports ollama and openrouter)
         from dotenv import load_dotenv
-        
         load_dotenv()
-        api_key = os.getenv("OPENROUTER_API_KEY")
-        model = os.getenv("OPENROUTER_MODEL", "arcee-ai/trinity-large-preview:free")
-        
-        if not api_key:
-            print(f"{RED}[ERROR] OPENROUTER_API_KEY not set{RESET}")
-            return
         
         try:
-            llm_client = OpenRouterClient(api_key=api_key, model=model)
-            print(f"{GREEN}[OK] OpenRouterClient initialized (model: {model}){RESET}")
+            llm_client = AIAgent.create_llm_client()
+            provider = os.getenv("LLM_PROVIDER", "ollama").lower()
+            model = getattr(llm_client, 'model', 'unknown')
+            print(f"{GREEN}[OK] LLM client initialized (provider: {provider}, model: {model}){RESET}")
         except Exception as e:
             print(f"{RED}[ERROR] Failed to initialize LLM: {e}{RESET}")
             return
@@ -176,9 +195,9 @@ async def main():
         # STEP 5: Run Agent with Remote Tool Access
         print_subheader("STEP 5: Run Agent with Remote Tool Access")
         
-        user_prompt = f"""I need you to help me perform a calculation using the remote tool.
-Please use the '{TOOL_NAME}' tool to calculate: 2048 + 512 - 256
-Then explain the result."""
+        user_prompt = f"""Use the '{TOOL_NAME}' tool to calculate: 2048 + 512 - 256
+Pass the full expression as a string in the 'expression' parameter.
+Once you receive the tool result, state the final numeric answer clearly."""
         
         print(f"{CYAN}User Request:{RESET}")
         print(f"  {user_prompt}\n")
