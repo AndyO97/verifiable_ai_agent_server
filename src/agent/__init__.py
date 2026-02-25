@@ -10,19 +10,22 @@ Supports LLM-integrated agent loops with OpenRouter and Ollama.
 
 from __future__ import annotations
 
-import asyncio
 import inspect
+import json
 import os
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Optional, Type, Union
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 import structlog
+from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, ValidationError, create_model
 
 if TYPE_CHECKING:
     from src.integrity import IntegrityMiddleware
     from src.llm import OllamaClient, OpenRouterClient
     from src.security import SecurityMiddleware
+
+from src.llm import LLMResponse
 
 logger = structlog.get_logger(__name__)
 
@@ -54,14 +57,6 @@ class AgentResponse(BaseModel):
     output: str                                 # LLM response text
     integrity: IntegrityMetadata               # Cryptographic commitments
     turns: int                                  # Number of interaction turns
-    
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to dict for backward compatibility with demos"""
-        return {
-            "output": self.output,
-            "integrity": self.integrity.model_dump(),
-            "turns": self.turns
-        }
 
 
 class ToolDefinition:
@@ -157,7 +152,6 @@ class VerificationAuditLogResource(Resource):
     
     def read(self) -> str:
         """Return audit log as JSON"""
-        import json
         return json.dumps({
             "session_id": self.session_id,
             "verifications": self.entries
@@ -582,7 +576,6 @@ class AIAgent:
         Raises:
             ValueError: If provider is unknown or required config is missing
         """
-        from dotenv import load_dotenv
         load_dotenv()
         
         provider = os.getenv("LLM_PROVIDER", "ollama").lower()
@@ -612,18 +605,202 @@ class AIAgent:
                 f"Unknown LLM_PROVIDER: '{provider}'. Supported: 'ollama', 'openrouter'"
             )
     
+    # ==================================================================================
+    # Private helpers — shared logic used by both run() and run_async()
+    # ==================================================================================
+
+    def _validate_and_prepare(self, prompt: str) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]:
+        """
+        Validate LLM client and prepare the execution context.
+        
+        Starts the top-level integrity span, records the initial prompt,
+        and builds the tool schema list for the LLM.
+        
+        Returns:
+            Tuple of (model_name, tool_schemas, conversation_history)
+            
+        Raises:
+            RuntimeError: If no LLM client is configured
+        """
+        if self.llm_client is None:
+            raise RuntimeError(
+                "No LLM client configured. Set LLM_PROVIDER in .env and ensure "
+                "the provider is properly configured (see .env for OLLAMA_* or OPENROUTER_* settings). "
+                "Use AIAgent.create_llm_client() to create one automatically."
+            )
+        
+        self.integrity.start_span("agent_run")
+        
+        model_name = getattr(self.llm_client, 'model', 'unknown')
+        self.integrity.record_prompt(prompt, metadata={"model": model_name})
+        
+        tool_schemas = self.mcp.list_tools()
+        conversation_history: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
+        
+        return model_name, tool_schemas, conversation_history
+
+    def _call_llm_and_record(
+        self,
+        conversation_history: list[dict[str, Any]],
+        tool_schemas: list[dict[str, Any]],
+        model_name: str,
+        turn_count: int,
+    ) -> tuple[Any, dict]:
+        """
+        Call the LLM and record the generation for observability.
+        
+        Returns:
+            Tuple of (llm_response, usage_dict)
+        """
+        llm_response = self.llm_client.call_llm(
+            messages=conversation_history,
+            tools=tool_schemas
+        )
+        
+        usage = getattr(llm_response, 'usage', {}) or {}
+        
+        self.integrity.record_llm_generation(
+            prompt=conversation_history[-1]["content"],
+            response=llm_response.text,
+            model=model_name,
+            name=f"llm_call_turn_{turn_count}",
+            input_tokens=usage.get("input_tokens", 0),
+            output_tokens=usage.get("output_tokens", 0),
+            turn=turn_count,
+        )
+        
+        return llm_response, usage
+
+    def _check_tool_authorization(self, tool_call: Any) -> Optional[str]:
+        """
+        Check tool authorization and record blocked attempts.
+        
+        Returns:
+            Error result string if the tool is blocked, None if authorized.
+        """
+        if not self.security.validate_tool_invocation(
+            self.integrity.session_id, tool_call.tool_name
+        ):
+            error_msg = f"Unauthorized tool: {tool_call.tool_name}"
+            logger.warning("tool_call_blocked", tool=tool_call.tool_name)
+            self.integrity.record_tool_input(tool_call.tool_name, tool_call.arguments)
+            tool_result = f"Error: {error_msg}"
+            self.integrity.record_tool_output(tool_call.tool_name, tool_result)
+            return tool_result
+        return None
+
+    def _execute_tool_sync(self, tool_call: Any) -> str:
+        """Execute a single tool synchronously with integrity recording."""
+        self.integrity.record_tool_input(tool_call.tool_name, tool_call.arguments)
+        try:
+            tool_result = self.mcp.invoke_tool(tool_call.tool_name, tool_call.arguments)
+            logger.info("tool_executed", tool=tool_call.tool_name, result=str(tool_result)[:100])
+        except Exception as e:
+            tool_result = f"Error executing tool: {str(e)}"
+            logger.exception("tool_execution_error", tool=tool_call.tool_name)
+        self.integrity.record_tool_output(tool_call.tool_name, tool_result)
+        return tool_result
+
+    async def _execute_tool_async(self, tool_call: Any) -> str:
+        """Execute a single tool asynchronously with integrity recording.
+        
+        Supports both sync and async tool handlers via invoke_tool_async.
+        Integrity recording remains synchronous to preserve cryptographic commitments.
+        """
+        self.integrity.record_tool_input(tool_call.tool_name, tool_call.arguments)
+        try:
+            tool_result = await self.mcp.invoke_tool_async(tool_call.tool_name, tool_call.arguments)
+            logger.info("tool_executed", tool=tool_call.tool_name, result=str(tool_result)[:100])
+        except Exception as e:
+            tool_result = f"Error executing tool: {str(e)}"
+            logger.exception("tool_execution_error", tool=tool_call.tool_name)
+        self.integrity.record_tool_output(tool_call.tool_name, tool_result)
+        return tool_result
+
+    def _append_tool_results_to_history(
+        self,
+        conversation_history: list[dict[str, Any]],
+        llm_response: Any,
+        tool_results_parts: list[str],
+    ) -> None:
+        """Append assistant response and tool results to conversation history for the next LLM turn."""
+        conversation_history.append({
+            "role": "assistant",
+            "content": llm_response.text
+        })
+        if llm_response.tool_calls:
+            results_msg = "\n".join(tool_results_parts)
+            conversation_history.append({
+                "role": "user",
+                "content": f"Tool results:\n{results_msg}\n\nBased on these tool results, please provide your final answer."
+            })
+
+    def _build_response(
+        self,
+        final_output: str,
+        model_name: str,
+        last_usage: dict,
+        turn_count: int,
+    ) -> dict[str, Any]:
+        """Record final output, finalize integrity commitments, and build the MCP response."""
+        if final_output:
+            output_metadata = {
+                "model": model_name,
+                "input_tokens": last_usage.get("input_tokens", 0),
+                "output_tokens": last_usage.get("output_tokens", 0),
+                "total_tokens": last_usage.get("total_tokens", 0),
+            }
+            self.integrity.record_model_output(final_output, metadata=output_metadata)
+        
+        # Finalize and commit (this finalizes the current span and creates session root)
+        # NOTE: Do NOT create an empty agent_finalize span - only commit non-empty spans
+        session_root, commitments, canonical_log_bytes = self.integrity.finalize()
+
+        # Persist canonical log for future audit/verification.
+        # The canonical_log_bytes are the raw bytes whose SHA-256 == canonical_log_hash.
+        # Without persisting these, the hash in the response is unverifiable after session ends.
+        if canonical_log_bytes:
+            logger.info("canonical_log_generated",
+                       size_bytes=len(canonical_log_bytes),
+                       hash=commitments.canonical_log_hash)
+        # TODO: Store canonical_log_bytes in a verifiable storage layer (e.g., IPFS, S3)
+        #       and include reference in response for third-party verification.
+        
+        integrity_metadata = IntegrityMetadata(
+            session_id=self.integrity.session_id,
+            session_root=session_root,
+            event_accumulator_root=commitments.event_accumulator_root,
+            span_roots=commitments.span_roots,
+            canonical_log_hash=commitments.canonical_log_hash,
+            event_count=commitments.event_count,
+            timestamp=commitments.timestamp
+        )
+        
+        response = AgentResponse(
+            output=final_output,
+            integrity=integrity_metadata,
+            turns=turn_count
+        )
+        
+        logger.info("agent_run_completed", session_root=session_root, event_count=commitments.event_count)
+        return response.model_dump()
+
+    # ==================================================================================
+    # Public entry points
+    # ==================================================================================
+
     def run(self, prompt: str, max_turns: int = 10) -> dict[str, Any]:
         """
-        Execute the agent with the given prompt.
+        Execute the agent with the given prompt (synchronous).
         
         Workflow:
         1. Record initial prompt
-        2. Call LLM with available tools
+        2. Call LLM with available tool schemas
         3. Parse tool calls from response
         4. For each tool call:
            - Validate authorization
            - Record tool input
-           - Execute tool
+           - Execute tool (sync)
            - Record tool output
         5. Continue until LLM produces final output
         6. Finalize and generate Verkle root
@@ -635,118 +812,49 @@ class AIAgent:
         Returns:
             Final output with integrity metadata
         """
-        # Start main span for entire agent execution
-        main_span_id = self.integrity.start_span("agent_run")
-        
-        # Get model name from LLM client if available
-        model_name = getattr(self.llm_client, 'model', 'unknown') if self.llm_client else 'unknown'
-        
-        # Record initial prompt (inside agent_run span)
-        self.integrity.record_prompt(prompt, metadata={"model": model_name})
+        model_name, tool_schemas, conversation_history = self._validate_and_prepare(prompt)
         
         final_output = None
         turn_count = 0
-        last_usage = {}  # Track usage from last LLM response for cost/token reporting
+        last_usage: dict = {}
         
         try:
-            # Build tool schemas for LLM
-            tool_schemas = self.mcp.list_tools()
-            
-            conversation_history = [
-                {"role": "user", "content": prompt}
-            ]
-            
             while turn_count < max_turns:
                 turn_count += 1
                 logger.info("agent_turn_start", turn=turn_count, session_id=self.integrity.session_id)
-                
-                # Start span for this turn (auto-finalizes previous span)
-                turn_span_id = self.integrity.start_span(f"agent_turn_{turn_count}")
+                self.integrity.start_span(f"agent_turn_{turn_count}")
                 
                 try:
-                    # Call LLM with full conversation history
-                    if self.llm_client is None:
-                        # Fallback: dummy implementation for testing without Ollama
-                        llm_response = self._dummy_llm_call(prompt)
-                    else:
-                        llm_response = self.llm_client.call_llm(
-                            messages=conversation_history,
-                            tools=tool_schemas
-                        )
-                    
-                    # Capture usage data for cost/token tracking
-                    last_usage = getattr(llm_response, 'usage', {}) or {}
-                    
-                    # Record LLM generation for observability (Langfuse only - no integrity impact)
-                    self.integrity.record_llm_generation(
-                        prompt=conversation_history[-1]["content"],
-                        response=llm_response.text,
-                        model=model_name,
-                        name=f"llm_call_turn_{turn_count}",
-                        input_tokens=last_usage.get("input_tokens", 0),
-                        output_tokens=last_usage.get("output_tokens", 0),
-                        turn=turn_count,
+                    llm_response, last_usage = self._call_llm_and_record(
+                        conversation_history, tool_schemas, model_name, turn_count
                     )
                     
-                    # Check if LLM wants to call tools
                     if not llm_response.has_tool_calls():
-                        # No more tool calls - this is the final output
                         final_output = llm_response.text
                         logger.info("agent_final_output", output_len=len(final_output))
                         break
                     
-                    # Process each tool call and collect results
+                    # Process each tool call (sync path)
                     tool_results_parts = []
                     for tool_call in llm_response.tool_calls:
                         logger.info("tool_call_requested", tool=tool_call.tool_name, args=tool_call.arguments)
                         
-                        # Check authorization
-                        if not self.security.validate_tool_invocation(self.integrity.session_id, tool_call.tool_name):
-                            error_msg = f"Unauthorized tool: {tool_call.tool_name}"
-                            logger.warning("tool_call_blocked", tool=tool_call.tool_name)
-                            # Record as blocked tool attempt
-                            self.integrity.record_tool_input(tool_call.tool_name, tool_call.arguments)
-                            tool_result = f"Error: {error_msg}"
-                            self.integrity.record_tool_output(tool_call.tool_name, tool_result)
+                        blocked_result = self._check_tool_authorization(tool_call)
+                        if blocked_result is not None:
+                            tool_result = blocked_result
                         else:
-                            # Record tool input
-                            self.integrity.record_tool_input(tool_call.tool_name, tool_call.arguments)
-                            
-                            # Execute tool
-                            try:
-                                tool_result = self.mcp.invoke_tool(
-                                    tool_call.tool_name,
-                                    tool_call.arguments
-                                )
-                                logger.info("tool_executed", tool=tool_call.tool_name, result=str(tool_result)[:100])
-                            except Exception as e:
-                                tool_result = f"Error executing tool: {str(e)}"
-                                logger.exception("tool_execution_error", tool=tool_call.tool_name)
-                            
-                            # Record tool output
-                            self.integrity.record_tool_output(tool_call.tool_name, tool_result)
+                            tool_result = self._execute_tool_sync(tool_call)
                         
                         tool_results_parts.append(f"Tool '{tool_call.tool_name}' returned: {tool_result}")
                     
-                    # Add assistant response to conversation for next turn
-                    conversation_history.append({
-                        "role": "assistant",
-                        "content": llm_response.text
-                    })
-                    
-                    # Feed tool results back to LLM with full context
-                    if llm_response.tool_calls:
-                        results_msg = "\n".join(tool_results_parts)
-                        conversation_history.append({
-                            "role": "user",
-                            "content": f"Tool results:\n{results_msg}\n\nBased on these tool results, please provide your final answer."
-                        })
+                    self._append_tool_results_to_history(
+                        conversation_history, llm_response, tool_results_parts
+                    )
                 
                 except Exception as e:
                     logger.exception("turn_error", turn=turn_count, error=str(e))
                     raise
             
-            # Fallback if we hit max turns
             if final_output is None:
                 final_output = "Agent reached maximum turns without final output"
                 logger.warning("agent_max_turns_reached", max_turns=max_turns)
@@ -755,40 +863,7 @@ class AIAgent:
             logger.exception("agent_error", error=str(e))
             final_output = f"Error during agent execution: {str(e)}"
         
-        # Record final output
-        if final_output:
-            output_metadata = {
-                "model": model_name,
-                "input_tokens": last_usage.get("input_tokens", 0),
-                "output_tokens": last_usage.get("output_tokens", 0),
-                "total_tokens": last_usage.get("total_tokens", 0),
-            }
-            self.integrity.record_model_output(final_output, metadata=output_metadata)
-        
-        # Finalize and commit (this finalizes the current span and creates session root)
-        # NOTE: Do NOT create an empty agent_finalize span - only commit non-empty spans
-        session_root, commitments, canonical_log_bytes = self.integrity.finalize()
-        
-        # Build MCP 2024-11 compliant response
-        integrity_metadata = IntegrityMetadata(
-            session_id=self.integrity.session_id,
-            session_root=session_root,
-            event_accumulator_root=commitments.event_accumulator_root,
-            span_roots=commitments.span_roots,
-            canonical_log_hash=commitments.canonical_log_hash,
-            event_count=commitments.event_count,
-            timestamp=commitments.timestamp
-        )
-        
-        response = AgentResponse(
-            output=final_output,
-            integrity=integrity_metadata,
-            turns=turn_count
-        )
-        
-        logger.info("agent_run_completed", session_root=session_root, event_count=commitments.event_count)
-        
-        return response.to_dict()  # Return dict for backward compatibility with demos
+        return self._build_response(final_output, model_name, last_usage, turn_count)
     
     async def run_async(self, prompt: str, max_turns: int = 10) -> dict[str, Any]:
         """
@@ -799,27 +874,8 @@ class AIAgent:
         Cryptographic Integrity Note:
         =============================
         This method produces IDENTICAL cryptographic commitments to run().
-        All integrity recording is synchronous (unchanged):
-        - integrity.record_prompt()
-        - integrity.record_tool_input()
-        - integrity.record_tool_output()
-        - integrity.record_model_output()
-        - integrity.finalize()
-        
+        All integrity recording is synchronous (unchanged).
         Only tool invocation is async (via invoke_tool_async).
-        This ensures complete backward compatibility and integrity preservation.
-        
-        Workflow:
-        1. Record initial prompt
-        2. Call LLM with available tools
-        3. Parse tool calls from response
-        4. For each tool call:
-           - Validate authorization
-           - Record tool input (synchronous)
-           - Execute tool async (supports both sync and async handlers)
-           - Record tool output (synchronous)
-        5. Continue until LLM produces final output
-        6. Finalize and generate Verkle root
         
         Args:
             prompt: Initial user prompt
@@ -828,118 +884,49 @@ class AIAgent:
         Returns:
             Final output with integrity metadata (same as run())
         """
-        # Start main span for entire agent execution
-        main_span_id = self.integrity.start_span("agent_run")
-        
-        # Get model name from LLM client if available
-        model_name = getattr(self.llm_client, 'model', 'unknown') if self.llm_client else 'unknown'
-        
-        # Record initial prompt (inside agent_run span)
-        self.integrity.record_prompt(prompt, metadata={"model": model_name})
+        model_name, tool_schemas, conversation_history = self._validate_and_prepare(prompt)
         
         final_output = None
         turn_count = 0
-        last_usage = {}  # Track usage from last LLM response for cost/token reporting
+        last_usage: dict = {}
         
         try:
-            # Build tool schemas for LLM
-            tool_schemas = self.mcp.list_tools()
-            
-            conversation_history = [
-                {"role": "user", "content": prompt}
-            ]
-            
             while turn_count < max_turns:
                 turn_count += 1
                 logger.info("agent_turn_start", turn=turn_count, session_id=self.integrity.session_id)
-                
-                # Start span for this turn (auto-finalizes previous span)
-                turn_span_id = self.integrity.start_span(f"agent_turn_{turn_count}")
+                self.integrity.start_span(f"agent_turn_{turn_count}")
                 
                 try:
-                    # Call LLM with full conversation history
-                    if self.llm_client is None:
-                        # Fallback: dummy implementation for testing without Ollama
-                        llm_response = self._dummy_llm_call(prompt)
-                    else:
-                        llm_response = self.llm_client.call_llm(
-                            messages=conversation_history,
-                            tools=tool_schemas
-                        )
-                    
-                    # Capture usage data for cost/token tracking
-                    last_usage = getattr(llm_response, 'usage', {}) or {}
-                    
-                    # Record LLM generation for observability (Langfuse only - no integrity impact)
-                    self.integrity.record_llm_generation(
-                        prompt=conversation_history[-1]["content"],
-                        response=llm_response.text,
-                        model=model_name,
-                        name=f"llm_call_turn_{turn_count}",
-                        input_tokens=last_usage.get("input_tokens", 0),
-                        output_tokens=last_usage.get("output_tokens", 0),
-                        turn=turn_count,
+                    llm_response, last_usage = self._call_llm_and_record(
+                        conversation_history, tool_schemas, model_name, turn_count
                     )
                     
-                    # Check if LLM wants to call tools
                     if not llm_response.has_tool_calls():
-                        # No more tool calls - this is the final output
                         final_output = llm_response.text
                         logger.info("agent_final_output", output_len=len(final_output))
                         break
                     
-                    # Process each tool call (ASYNC PATH - supports async handlers)
+                    # Process each tool call (async path)
                     tool_results_parts = []
                     for tool_call in llm_response.tool_calls:
                         logger.info("tool_call_requested", tool=tool_call.tool_name, args=tool_call.arguments)
                         
-                        # Check authorization
-                        if not self.security.validate_tool_invocation(self.integrity.session_id, tool_call.tool_name):
-                            error_msg = f"Unauthorized tool: {tool_call.tool_name}"
-                            logger.warning("tool_call_blocked", tool=tool_call.tool_name)
-                            # Record as blocked tool attempt (synchronous)
-                            self.integrity.record_tool_input(tool_call.tool_name, tool_call.arguments)
-                            tool_result = f"Error: {error_msg}"
-                            self.integrity.record_tool_output(tool_call.tool_name, tool_result)
+                        blocked_result = self._check_tool_authorization(tool_call)
+                        if blocked_result is not None:
+                            tool_result = blocked_result
                         else:
-                            # Record tool input (synchronous - doesn't change commitments)
-                            self.integrity.record_tool_input(tool_call.tool_name, tool_call.arguments)
-                            
-                            # Execute tool (ASYNC - supports both sync and async handlers)
-                            try:
-                                tool_result = await self.mcp.invoke_tool_async(
-                                    tool_call.tool_name,
-                                    tool_call.arguments
-                                )
-                                logger.info("tool_executed", tool=tool_call.tool_name, result=str(tool_result)[:100])
-                            except Exception as e:
-                                tool_result = f"Error executing tool: {str(e)}"
-                                logger.exception("tool_execution_error", tool=tool_call.tool_name)
-                            
-                            # Record tool output (synchronous - doesn't change commitments)
-                            self.integrity.record_tool_output(tool_call.tool_name, tool_result)
+                            tool_result = await self._execute_tool_async(tool_call)
                         
                         tool_results_parts.append(f"Tool '{tool_call.tool_name}' returned: {tool_result}")
                     
-                    # Add assistant response to conversation for next turn
-                    conversation_history.append({
-                        "role": "assistant",
-                        "content": llm_response.text
-                    })
-                    
-                    # Feed tool results back to LLM with full context
-                    if llm_response.tool_calls:
-                        results_msg = "\n".join(tool_results_parts)
-                        conversation_history.append({
-                            "role": "user",
-                            "content": f"Tool results:\n{results_msg}\n\nBased on these tool results, please provide your final answer."
-                        })
+                    self._append_tool_results_to_history(
+                        conversation_history, llm_response, tool_results_parts
+                    )
                 
                 except Exception as e:
                     logger.exception("turn_error", turn=turn_count, error=str(e))
                     raise
             
-            # Fallback if we hit max turns
             if final_output is None:
                 final_output = "Agent reached maximum turns without final output"
                 logger.warning("agent_max_turns_reached", max_turns=max_turns)
@@ -948,51 +935,6 @@ class AIAgent:
             logger.exception("agent_error", error=str(e))
             final_output = f"Error during agent execution: {str(e)}"
         
-        # Record final output (synchronous - doesn't change commitments)
-        if final_output:
-            output_metadata = {
-                "model": model_name,
-                "input_tokens": last_usage.get("input_tokens", 0),
-                "output_tokens": last_usage.get("output_tokens", 0),
-                "total_tokens": last_usage.get("total_tokens", 0),
-            }
-            self.integrity.record_model_output(final_output, metadata=output_metadata)
-        
-        # Finalize and commit (this finalizes the current span and creates session root)
-        # NOTE: Do NOT create an empty agent_finalize span - only commit non-empty spans
-        session_root, commitments, canonical_log_bytes = self.integrity.finalize()
-        
-        # Build MCP 2024-11 compliant response
-        integrity_metadata = IntegrityMetadata(
-            session_id=self.integrity.session_id,
-            session_root=session_root,
-            event_accumulator_root=commitments.event_accumulator_root,
-            span_roots=commitments.span_roots,
-            canonical_log_hash=commitments.canonical_log_hash,
-            event_count=commitments.event_count,
-            timestamp=commitments.timestamp
-        )
-        
-        response = AgentResponse(
-            output=final_output,
-            integrity=integrity_metadata,
-            turns=turn_count
-        )
-        
-        logger.info("agent_run_completed", session_root=session_root, event_count=commitments.event_count)
-        
-        return response.to_dict()  # Return dict for backward compatibility with demos
+        return self._build_response(final_output, model_name, last_usage, turn_count)
     
-    def _dummy_llm_call(self, prompt: str) -> Any:
-        """
-        Dummy LLM response for testing without Ollama running.
-        Returns a simple response without tool calls.
-        """
-        from src.llm import LLMResponse
-        
-        logger.info("using_dummy_llm_response")
-        return LLMResponse(
-            text=f"Dummy response to: {prompt[:50]}...",
-            tool_calls=[],
-            stop_reason="end_turn"
-        )
+

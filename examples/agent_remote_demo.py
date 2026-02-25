@@ -18,11 +18,7 @@ Usage:
 import sys
 import os
 import uuid
-import time
-import json
 import asyncio
-import base64
-import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -206,22 +202,15 @@ Once you receive the tool result, state the final numeric answer clearly."""
         result = await agent.run_async(prompt=user_prompt, max_turns=8)
         
         print(f"\n{BOLD}Agent Response:{RESET}")
-        # Ensure result is in dict format for compatibility (MCP 2024-11 compliant)
-        if isinstance(result, dict):
-            result_dict = result
-        else:
-            # If it's an AgentResponse object, convert to dict
-            result_dict = result.model_dump() if hasattr(result, 'model_dump') else result.to_dict()
+        print(f"{CYAN}{result['output']}{RESET}\n")
         
-        print(f"{CYAN}{result_dict['output']}{RESET}\n")
-        
-        print(f"{GREEN}[OK] Agent execution completed with {result_dict['turns']} turn(s)${RESET}\n")
+        print(f"{GREEN}[OK] Agent execution completed with {result['turns']} turn(s)${RESET}\n")
         
         # STEP 6: Finalize Hierarchical Verkle Tree
         print_subheader("STEP 6: Finalize Hierarchical Verkle Tree")
         
         # Finalize middleware (includes hierarchical Verkle roots and Langfuse integration)
-        integrity_result = result_dict['integrity']
+        integrity_result = result['integrity']
         session_root = integrity_result.get('session_root')
         event_accumulator_root = integrity_result.get('event_accumulator_root')
         

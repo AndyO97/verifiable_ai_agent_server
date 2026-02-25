@@ -374,15 +374,12 @@ class TestAIAgentWithMockLLM:
         # Should still record events
         assert result["integrity"]["event_count"] >= 2
     
-    def test_agent_fallback_to_dummy_llm(self, integrity_middleware, security_middleware, mcp_server):
-        """Test agent falls back to dummy LLM when client is None"""
+    def test_agent_raises_without_llm_client(self, integrity_middleware, security_middleware, mcp_server):
+        """Test agent raises RuntimeError when no LLM client is configured"""
         agent = AIAgent(integrity_middleware, security_middleware, mcp_server, llm_client=None)
-        result = agent.run("Test prompt", max_turns=5)
         
-        # Should complete successfully with dummy LLM
-        assert result["output"] is not None
-        assert "Dummy response" in result["output"]
-        assert result["turns"] == 1
+        with pytest.raises(RuntimeError, match="No LLM client configured"):
+            agent.run("Test prompt", max_turns=5)
 
 
 # ==============================================================================

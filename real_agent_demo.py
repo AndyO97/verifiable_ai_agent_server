@@ -35,17 +35,11 @@ Or as one line:
 ✓ Determinism: RFC 8785 canonical JSON ensures reproducibility
 """
 
-import json
 import os
-import base64
-import hashlib
-import requests
 import sys
-import uuid
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Dict, Any
 from dotenv import load_dotenv
 
 # Fix Unicode issues on Windows
@@ -203,32 +197,73 @@ def run_real_agent_workflow() -> None:
     # Initialize MCP server and register tools
     mcp_server = MCPServer(session_id=session_id)
     
-    # Register tools using ToolDefinition
+    # Register tools using ToolDefinition with proper JSON Schema
     mcp_server.register_tool(ToolDefinition(
         name="get_current_time",
-        description="Get the current date and time",
-        input_schema={},
+        description="Get the current date and time. Takes no arguments.",
+        input_schema={"type": "object", "properties": {}},
         handler=get_current_time
     ))
     
     mcp_server.register_tool(ToolDefinition(
         name="calculate",
-        description="Evaluate a mathematical expression",
-        input_schema={"expression": str},
+        description=(
+            "Evaluate a mathematical expression and return the numeric result. "
+            "Supports: +, -, *, /, parentheses, sqrt, sin, cos, log, pow, abs, min, max, pi, e. "
+            'Example: {"expression": "(7*1024*1024)/(3.5*1024)"} returns "Result: 2048.0".'
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "expression": {
+                    "type": "string",
+                    "description": "Mathematical expression to evaluate, e.g. '(7*1024*1024)/(3.5*1024)'"
+                }
+            },
+            "required": ["expression"]
+        },
         handler=lambda expression: calculate(expression)
     ))
     
     mcp_server.register_tool(ToolDefinition(
         name="get_crypto_info",
-        description="Get information about cryptographic concepts",
-        input_schema={"concept": str},
+        description=(
+            "Get information about a cryptographic concept. "
+            "Available concepts: SHA-256, BLS12-381, KZG, Verkle-Tree, ECDSA, RFC-8785. "
+            'Example: {"concept": "KZG"} returns info about KZG commitments.'
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "concept": {
+                    "type": "string",
+                    "description": "Cryptographic concept name. Must be one of: SHA-256, BLS12-381, KZG, Verkle-Tree, ECDSA, RFC-8785",
+                    "enum": ["SHA-256", "BLS12-381", "KZG", "Verkle-Tree", "ECDSA", "RFC-8785"]
+                }
+            },
+            "required": ["concept"]
+        },
         handler=lambda concept: get_crypto_info(concept)
     ))
     
     mcp_server.register_tool(ToolDefinition(
         name="query_verkle",
-        description="Get information about Verkle trees and their properties",
-        input_schema={"query": str},
+        description=(
+            "Query specific properties of Verkle trees. "
+            "Available queries: efficiency, proof-size, stateless-execution, commitment-scheme, bandwidth. "
+            'Example: {"query": "proof-size"} returns Verkle tree proof size comparison.'
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Verkle tree property to query. Must be one of: efficiency, proof-size, stateless-execution, commitment-scheme, bandwidth",
+                    "enum": ["efficiency", "proof-size", "stateless-execution", "commitment-scheme", "bandwidth"]
+                }
+            },
+            "required": ["query"]
+        },
         handler=lambda query: query_verkle(query)
     ))
     
@@ -283,23 +318,16 @@ Then summarize the findings."""
     # STEP 3: Display results
     print_subheader("STEP 3: Agent Execution Results")
     
-    # Ensure result is in dict format for compatibility (MCP 2024-11 compliant)
-    if isinstance(result, dict):
-        result_dict = result
-    else:
-        # If it's an AgentResponse object, convert to dict
-        result_dict = result.model_dump() if hasattr(result, 'model_dump') else result.to_dict()
-    
     print(f"{BOLD}Final Output:{RESET}")
-    print(f"{MAGENTA}{result_dict['output']}{RESET}\n")
+    print(f"{MAGENTA}{result['output']}{RESET}\n")
     
     print(f"{BOLD}Execution Summary:{RESET}")
-    print(f"  Turns: {result_dict['turns']}")
+    print(f"  Turns: {result['turns']}")
     print(f"  Session ID: {session_id}")
     print(f"  Model: {model}\n")
     
     # STEP 4: Finalize and display cryptographic verification
-    integrity_result = result_dict['integrity']
+    integrity_result = result['integrity']
     session_root = integrity_result.get('session_root')
     event_accumulator_root = integrity_result.get('event_accumulator_root')
     
@@ -356,7 +384,7 @@ Then summarize the findings."""
     print_subheader("STEP 8: Comprehensive Integrity Report")
     
     print(f"""{GREEN}Summary:{RESET}
-  - Total LLM Turns: {result_dict['turns']}
+  - Total LLM Turns: {result['turns']}
   - Tools Available: {len(mcp_server.tools)}
   - Spans Recorded: {len(integrity_middleware.spans)}
   - Protocol Used: MCP 2024-11 with JSON-RPC 2.0
