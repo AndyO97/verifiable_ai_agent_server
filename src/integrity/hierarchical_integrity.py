@@ -18,9 +18,10 @@ Langfuse Hierarchy (handled internally):
 
 import hashlib
 import json
+import requests
 import uuid
 from dataclasses import dataclass, asdict
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional, Tuple, Dict
 
@@ -120,7 +121,6 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
     def _initialize_langfuse_client(self) -> None:
         """Initialize Langfuse client for observability"""
         try:
-            import requests
             response = requests.get("http://localhost:3000/api/public/health", timeout=1)
             if response.status_code != 200:
                 logger.debug("langfuse_server_not_available")

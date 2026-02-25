@@ -5,7 +5,9 @@ Unified middleware that records both application events and MCP protocol events
 into a single Verkle accumulator with integrated Langfuse observability.
 """
 
+import base64
 import hashlib
+import requests
 import uuid
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
@@ -78,7 +80,6 @@ class IntegrityMiddleware:
         """Initialize Langfuse if available"""
         try:
             # Check if Langfuse server is running
-            import requests
             response = requests.get("http://localhost:3000/api/public/health", timeout=1)
             if response.status_code != 200:
                 logger.debug("langfuse_server_not_available")
@@ -313,7 +314,6 @@ class IntegrityMiddleware:
         root_b64 = self.accumulator.get_root_b64()
         
         # Sign the Verkle Root (using KZG commitment bytes)
-        import base64
         root_bytes = base64.b64decode(root_b64)
         root_signature = self.authority.sign_root(root_bytes)
         

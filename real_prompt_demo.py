@@ -38,18 +38,12 @@ Or as one line:
 ✓ Determinism: JSON-RPC canonical format ensures reproducibility
 """
 
-import json
 import os
-import base64
-import hashlib
-import requests
 import sys
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Any
 from dotenv import load_dotenv
-import uuid
 
 # Fix Unicode issues on Windows
 if sys.stdout.encoding != 'utf-8':
@@ -184,14 +178,7 @@ def run_real_agent_workflow() -> None:
     # STEP 5: Display Response
     print_subheader("STEP 5: LLM Response")
     
-    # Ensure result is in dict format for compatibility
-    if isinstance(result, dict):
-        result_dict = result
-    else:
-        # If it's an AgentResponse object, convert to dict
-        result_dict = result.model_dump() if hasattr(result, 'model_dump') else result.to_dict()
-    
-    llm_response_text = result_dict['output']
+    llm_response_text = result['output']
     print_event("LLM_RESPONSE", llm_response_text, MAGENTA)
     
     print(f"{BOLD}Response from LLM ({provider}):{RESET}")
@@ -202,7 +189,7 @@ def run_real_agent_workflow() -> None:
     # STEP 6: Finalize and compute KZG commitment
     print_subheader("STEP 6: Finalize Hierarchical Verkle Tree and Generate Session Root")
     
-    integrity_result = result_dict['integrity']
+    integrity_result = result['integrity']
     session_root = integrity_result.get('session_root')
     event_accumulator_root = integrity_result.get('event_accumulator_root')
     

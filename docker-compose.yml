@@ -1,5 +1,3 @@
-version: '3.8'
-
 # Langfuse Self-Hosted Deployment
 # Provides trace collection, visualization dashboard, and LLM cost tracking
 #
@@ -50,9 +48,11 @@ services:
   # Langfuse backend API
   langfuse_server:
     image: langfuse/langfuse:2
-    container_name: langfuse_server
+    container_name: langfuse_hack
     depends_on:
       postgres:
+        condition: service_healthy
+      clickhouse:
         condition: service_healthy
     environment:
       # Database connection

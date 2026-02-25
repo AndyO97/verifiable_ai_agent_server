@@ -1,5 +1,5 @@
 """
-PostgreSQL-backed atomic counter for replay prevention (Phase 3 Task 3).
+PostgreSQL-backed atomic counter for replay prevention.
 
 Provides:
 - Atomic monotonic counter increment
