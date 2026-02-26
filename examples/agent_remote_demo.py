@@ -27,10 +27,9 @@ from typing import Any
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from src.integrity import HierarchicalVerkleMiddleware
-from src.config import get_settings
 from src.transport.secure_mcp import SecureMCPClient
-from src.transport.jsonrpc_protocol import MCPProtocolHandler, JSONRPCRequest, JSONRPCResponse
-from src.agent import MCPServer, AIAgent, ToolDefinition, AgentResponse
+from src.transport.jsonrpc_protocol import MCPProtocolHandler
+from src.agent import MCPServer, AIAgent, ToolDefinition
 
 # ANSI Colors
 GREEN = "\033[92m"

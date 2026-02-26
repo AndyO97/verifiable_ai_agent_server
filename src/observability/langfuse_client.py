@@ -138,10 +138,6 @@ class LangfuseClient:
         and start a new one within the same session. After flushing with reset=True,
         you can call create_trace() again to start a new trace.
         
-        NOTE: Previous issue with duplicate traces on each trace-create call
-        appears to be fixed by including the 'id' field in the trace body.
-        Langfuse now properly updates existing traces. Needs further testing.
-        
         Args:
             reset: If True, reset trace state for next trace. If False, keep state
                    (used internally by update_trace to allow continued updates).
@@ -399,10 +395,6 @@ class LangfuseClient:
         Update a trace with input, output and metadata.
         
         Updates are accumulated locally and only sent when flush=True.
-        
-        NOTE: Previous issue with duplicate traces appears to be fixed by
-        including the 'id' field in the trace body. Langfuse now properly
-        merges updates into the existing trace. Needs further testing.
         
         Args:
             trace_id: Trace ID to update (uses current if not provided)

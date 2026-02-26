@@ -79,8 +79,11 @@ class IntegrityMiddleware:
     def _initialize_langfuse(self) -> None:
         """Initialize Langfuse if available"""
         try:
+            settings = get_settings()
+            langfuse_endpoint = settings.langfuse.api_endpoint
+            
             # Check if Langfuse server is running
-            response = requests.get("http://localhost:3000/api/public/health", timeout=1)
+            response = requests.get(f"{langfuse_endpoint}/api/public/health", timeout=1)
             if response.status_code != 200:
                 logger.debug("langfuse_server_not_available")
                 return

@@ -7,8 +7,6 @@ import json
 import unicodedata
 from typing import Any
 
-import msgpack
-
 
 def is_finite(val: float) -> bool:
     """Check if a float is finite (no NaN, Infinity, -Infinity)"""

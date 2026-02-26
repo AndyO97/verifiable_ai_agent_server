@@ -31,7 +31,7 @@ class OllamaSettings(BaseSettings):
     model_config = ConfigDict(env_prefix="OLLAMA_", env_file=".env", case_sensitive=False, extra="ignore")
     
     base_url: str = "http://localhost:11434"
-    model: str = "mistral"
+    model: str = "llama3.1"
     temperature: float = 0.7
     max_tokens: int = 2000
 
@@ -41,7 +41,7 @@ class OpenRouterSettings(BaseSettings):
     model_config = ConfigDict(env_prefix="OPENROUTER_", env_file=".env", case_sensitive=False, extra="ignore")
     
     api_key: Optional[str] = None  # From OPENROUTER_API_KEY env var
-    model: str = "mistralai/devstral-2512:free"  # Free Devstral 2512 model
+    model: str = "arcee-ai/trinity-large-preview:free"  # Default matches .env
     base_url: str = "https://openrouter.ai/api/v1"
     temperature: float = 0.3  # Lower temperature for more deterministic behavior
     max_tokens: int = 4000  # Increased for better tool call generation

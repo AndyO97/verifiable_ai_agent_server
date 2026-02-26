@@ -14,8 +14,7 @@ from typing import Any
 
 try:
     from py_ecc.optimized_bls12_381 import (
-        G1, G2, Z1, Z2, pairing, curve_order, 
-        multiply, add, field_modulus
+        G1, Z1, curve_order, multiply, add
     )
 except ImportError:
     raise ImportError(

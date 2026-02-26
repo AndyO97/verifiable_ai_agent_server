@@ -15,6 +15,9 @@ from typing import TYPE_CHECKING, Any, Optional
 import requests
 import structlog
 
+# Config helper used by clients to read .env settings
+from src.config import get_settings
+
 if TYPE_CHECKING:
     from opentelemetry import trace
 
@@ -62,12 +65,12 @@ class OllamaClient:
     Requires Ollama running locally (default: http://localhost:11434)
     """
     
-    def __init__(self, base_url: str = "http://localhost:11434", model: str = "llama2"):
-        self.base_url = base_url
-        self.model = model
-        self.endpoint = f"{base_url}/api/chat"
-        
-        logger.info("ollama_client_initialized", model=model, base_url=base_url)
+    def __init__(self, base_url: str = None, model: str = None):
+        settings = get_settings()
+        self.base_url = base_url or settings.ollama.base_url
+        self.model = model or settings.ollama.model
+        self.endpoint = f"{self.base_url}/api/chat"
+        logger.info("ollama_client_initialized", model=self.model, base_url=self.base_url)
     
     def health_check(self) -> bool:
         """Check if Ollama is running"""
@@ -248,32 +251,30 @@ class OpenRouterClient:
     def __init__(
         self,
         api_key: Optional[str] = None,
-        model: str = "mistralai/devstral-2512:free",
-        base_url: str = "https://openrouter.ai/api/v1"
+        model: str = None,
+        base_url: str = None
     ):
         """
         Initialize OpenRouter client
         
         Args:
             api_key: OpenRouter API key (from environment if not provided)
-            model: Model name (default: free Devstral 2512)
-            base_url: OpenRouter API base URL
+            model: Model name (default: from config or .env)
+            base_url: OpenRouter API base URL (default: from config or .env)
         """
-        self.api_key = api_key or os.getenv("OPENROUTER_API_KEY")
-        
+        settings = get_settings()
+        self.api_key = api_key or os.getenv("OPENROUTER_API_KEY") or settings.openrouter.api_key
         if not self.api_key:
             raise ValueError(
                 "OpenRouter API key not found. Please set OPENROUTER_API_KEY environment variable "
                 "or pass api_key parameter. Get a free API key at https://openrouter.ai/keys"
             )
-        
-        self.model = model
-        self.base_url = base_url
-        self.endpoint = f"{base_url}/chat/completions"
-        
+        self.model = model or settings.openrouter.model or "arcee-ai/trinity-large-preview:free"
+        self.base_url = base_url or settings.openrouter.base_url or "https://openrouter.ai/api/v1"
+        self.endpoint = f"{self.base_url}/chat/completions"
         logger.info(
             "openrouter_client_initialized",
-            model=model,
+            model=self.model,
             has_api_key=bool(self.api_key)
         )
     

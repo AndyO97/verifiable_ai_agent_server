@@ -4,7 +4,7 @@ Security module - Authorization and threat prevention
 
 import structlog
 from enum import Enum
-from typing import Any, Callable
+from typing import Any
 
 logger = structlog.get_logger(__name__)
 

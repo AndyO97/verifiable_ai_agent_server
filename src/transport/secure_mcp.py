@@ -3,7 +3,7 @@ Secure Verifiable Transport Layer for MCP (WebSocket Edition)
 Implements the cryptographic handshake and channel security for remote tools using Async WebSockets.
 """
 
-from typing import Tuple, Optional, Any, Callable
+from typing import Optional, Any, Callable
 import asyncio
 import json
 import logging
@@ -14,7 +14,7 @@ from websockets.server import serve
 from websockets.client import connect
 
 from src.crypto.encoding import canonicalize_json
-from src.security.key_management import ToolSigner, Verifier
+from src.security.key_management import ToolSigner
 import src.crypto.kex as kex
 
 # py_ecc imports for signature reconstruction

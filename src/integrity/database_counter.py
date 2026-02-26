@@ -8,6 +8,7 @@ Provides:
 - Thread-safe operations
 """
 
+
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -15,6 +16,8 @@ import structlog
 from sqlalchemy import create_engine, Column, String, Integer, DateTime, UniqueConstraint
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import declarative_base, sessionmaker
+
+from src.config import get_settings, PostgresSettings
 
 logger = structlog.get_logger(__name__)
 
@@ -48,15 +51,19 @@ class DatabaseCounter:
     def __init__(
         self,
         session_id: str,
-        db_url: str = "postgresql://postgres:postgres@localhost:5432/verifiable_agent"
+        db_url: str | None = None
     ):
         """
         Initialize database counter for a session.
         
         Args:
             session_id: Unique session identifier
-            db_url: PostgreSQL connection string
+            db_url: PostgreSQL connection string (defaults to settings from .env)
         """
+        if db_url is None:
+            pg = get_settings().postgres
+            db_url = f"postgresql://{pg.user}:{pg.password}@{pg.host}:{pg.port}/{pg.database}"
+        
         self.session_id = session_id
         self.db_url = db_url
         self.local_counter = 0
@@ -215,8 +222,6 @@ def create_database_counter(
     Returns:
         Initialized DatabaseCounter instance
     """
-    from src.config import PostgresSettings
-    
     if db_url is None:
         # Use settings from environment
         pg_settings = PostgresSettings(password="postgres")  # Default
