@@ -5,11 +5,11 @@ Implements a Cha-Cheon style IBS scheme for "Tool Name as Public Key" architectu
 
 import hashlib
 import os
-from typing import Tuple, Optional, Union, Any
+from typing import Tuple, Optional, Any
 
 try:
     from py_ecc.optimized_bls12_381 import (
-        G1, G2, multiply, add, pairing, curve_order, field_modulus, FQ, neg
+        G2, multiply, add, pairing, curve_order, field_modulus, FQ
     )
 except ImportError:
     raise ImportError("py-ecc library required")

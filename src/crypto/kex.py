@@ -1,8 +1,5 @@
-
-import socket
 import os
 import struct
-import json
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF

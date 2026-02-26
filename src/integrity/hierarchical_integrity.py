@@ -27,6 +27,7 @@ from typing import Any, Optional, Tuple, Dict
 
 import structlog
 
+from src.config import get_settings
 from src.integrity import IntegrityMiddleware, IntegrityEvent
 from src.crypto.verkle import VerkleAccumulator
 from src.observability.langfuse_client import LangfuseClient
@@ -121,7 +122,9 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
     def _initialize_langfuse_client(self) -> None:
         """Initialize Langfuse client for observability"""
         try:
-            response = requests.get("http://localhost:3000/api/public/health", timeout=1)
+            settings = get_settings()
+            langfuse_endpoint = settings.langfuse.api_endpoint
+            response = requests.get(f"{langfuse_endpoint}/api/public/health", timeout=1)
             if response.status_code != 200:
                 logger.debug("langfuse_server_not_available")
                 self.langfuse_client = None
