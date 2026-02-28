@@ -32,7 +32,29 @@ A high-integrity, self-hosted AI Agent Server built on the Model Context Protoco
 - Optional: PostgreSQL (for production counter persistence)
 - Optional: Langfuse self-hosted instance (for observability)
 
+
 ### Installation (Recommended: uv)
+---
+
+## 🌐 Backend Web Server (FastAPI)
+
+To run the web frontend and chat API, you need FastAPI and Uvicorn installed in your virtual environment:
+
+```powershell
+# Activate your virtual environment
+.\venv\Scripts\Activate.ps1
+
+# Install FastAPI and Uvicorn
+pip install fastapi uvicorn
+```
+
+Then start the backend server:
+
+```powershell
+python backend/server.py
+```
+
+Visit http://localhost:8000 in your browser to use the chat interface.
 
 #### Option 1: Automated Setup (Recommended)
 
@@ -64,9 +86,32 @@ uv venv
 # 4. Install dependencies
 uv pip install -e ".[dev]"
 
+
 # 5. Run tests
 python -m pytest tests/ -v
 ```
+
+---
+
+## 🌐 Backend Web Server (FastAPI)
+
+To run the web frontend and chat API, you need FastAPI and Uvicorn installed in your virtual environment:
+
+```powershell
+# Activate your virtual environment
+.\venv\Scripts\Activate.ps1
+
+# Install FastAPI and Uvicorn
+pip install fastapi uvicorn
+```
+
+Then start the backend server:
+
+```powershell
+python backend/server.py
+```
+
+Visit http://localhost:8000 in your browser to use the chat interface.
 
 ### Why uv?
 
