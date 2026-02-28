@@ -85,6 +85,14 @@ class SecuritySettings(BaseSettings):
     master_secret_key: Optional[str] = None
 
 
+
+class OpenWeatherSettings(BaseSettings):
+    """OpenWeatherMap API settings"""
+    model_config = ConfigDict(env_prefix="OPENWEATHER_", env_file=".env", case_sensitive=False, extra="ignore")
+    api_key: Optional[str] = None  # From OPENWEATHER_API_KEY
+    base_url: str = "https://api.openweathermap.org/data/2.5"
+
+
 class Settings(BaseSettings):
     """Main application settings"""
     model_config = ConfigDict(env_file=".env", case_sensitive=False)
@@ -116,6 +124,9 @@ class Settings(BaseSettings):
     # Observability
     langfuse: LangfuseSettings = LangfuseSettings()
     otel: OTelSettings = OTelSettings()
+    
+    # OpenWeather
+    openweather: OpenWeatherSettings = OpenWeatherSettings()
 
 
 # Global settings instance
