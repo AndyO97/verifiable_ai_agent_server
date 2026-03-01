@@ -7,6 +7,7 @@ This script defines the same tools and MCP server setup as agent_multi_tool_demo
 import os
 import sys
 import asyncio
+import requests
 from typing import Any
 from datetime import datetime
 from pathlib import Path
@@ -20,12 +21,12 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from src.agent import MCPServer, AIAgent, ToolDefinition
 from src.integrity import HierarchicalVerkleMiddleware
+from src.security import SecurityMiddleware
+from src.config import get_settings
 
 # --- Tool Definitions ---
 
 async def weather_tool(city=None, **kwargs) -> str:
-    import requests
-    from src.config import get_settings
     if city is None:
         city = kwargs.get('q')
     if not city:
@@ -47,8 +48,18 @@ async def weather_tool(city=None, **kwargs) -> str:
     except Exception as e:
         return f"Error: {str(e)}"
 
-async def currency_tool(from_currency: str, to_currency: str) -> str:
-    import requests
+async def currency_tool(from_currency: str = None, to_currency: str = None, **kwargs) -> str:
+    # Handle alternative parameter names the agent might use
+    if from_currency is None:
+        from_currency = kwargs.get('from') or kwargs.get('base') or kwargs.get('from_currency')
+    if to_currency is None:
+        to_currency = kwargs.get('to') or kwargs.get('symbols') or kwargs.get('to_currency')
+    
+    amount = kwargs.get('amount', 1)  # Optional amount for conversion, default 1
+    
+    if not from_currency or not to_currency:
+        return "Error: from_currency and to_currency are required."
+    
     url = f"https://api.exchangerate-api.com/v4/latest/{from_currency.upper()}"
     try:
         resp = requests.get(url, timeout=5)
@@ -58,7 +69,11 @@ async def currency_tool(from_currency: str, to_currency: str) -> str:
         rate = data['rates'].get(to_currency.upper())
         if rate is None:
             return f"Error: Currency {to_currency} not found."
-        return f"1 {from_currency.upper()} = {rate} {to_currency.upper()}"
+        result = rate * amount
+        if amount == 1:
+            return f"1 {from_currency.upper()} = {rate} {to_currency.upper()}"
+        else:
+            return f"{amount} {from_currency.upper()} = {result} {to_currency.upper()}"
     except Exception as e:
         return f"Error: {str(e)}"
 
@@ -77,7 +92,6 @@ async def math_tool(expression: str = None, **kwargs) -> str:
         return f"Error: {str(e)}"
 
 async def wikipedia_tool(query: str) -> str:
-    import requests
     url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{query.replace(' ', '%20')}"
     try:
         headers = {"User-Agent": "Mozilla/5.0 (compatible; MCPAgent/1.0; +https://example.com/)"}
@@ -122,12 +136,13 @@ mcp_server.register_tool(ToolDefinition(
 ))
 mcp_server.register_tool(ToolDefinition(
     name="currency",
-    description="Get exchange rate between two currencies (exchangerate-api).",
+    description="Get exchange rate between two currencies (exchangerate-api). Accepts from_currency and to_currency, with optional amount (default 1).",
     input_schema={
         "type": "object",
         "properties": {
-            "from_currency": {"type": "string", "description": "Source currency code"},
-            "to_currency": {"type": "string", "description": "Target currency code"}
+            "from_currency": {"type": "string", "description": "Source currency code (e.g., USD)"},
+            "to_currency": {"type": "string", "description": "Target currency code (e.g., EUR)"},
+            "amount": {"type": "number", "description": "Amount to convert (default: 1)"}
         },
         "required": ["from_currency", "to_currency"]
     },
@@ -170,6 +185,10 @@ mcp_server.register_tool(ToolDefinition(
     handler=datetime_tool
 ))
 
+# --- Security Middleware Setup ---
+security_middleware = SecurityMiddleware()
+security_middleware.register_from_mcp_server(mcp_server)
+
 # --- Agent Setup ---
 async def answer_prompt(prompt: str) -> str:
     """
@@ -180,12 +199,9 @@ async def answer_prompt(prompt: str) -> str:
         llm_client = AIAgent.create_llm_client()
     except Exception as e:
         return f"Error initializing LLM client: {e}"
-    class DummySecurityMiddleware:
-        def validate_tool_invocation(self, session_id: str, tool_name: str) -> bool:
-            return True
     agent = AIAgent(
         integrity_middleware=middleware,
-        security_middleware=DummySecurityMiddleware(),
+        security_middleware=security_middleware,
         mcp_server=mcp_server,
         llm_client=llm_client
     )

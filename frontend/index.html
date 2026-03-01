@@ -7,17 +7,33 @@
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-  <div class="chat-container">
-    <div class="chat-header">
-      <h1>AI Agent Chat</h1>
+  <div class="app-layout">
+    <!-- Sidebar -->
+    <aside id="sidebar" class="sidebar">
+      <div class="sidebar-header">
+        <h2>Conversations</h2>
+        <button id="new-chat-btn" title="New Chat">+ New</button>
+      </div>
+      <div id="conversation-list" class="conversation-list">
+        <!-- Populated by JS -->
+      </div>
+    </aside>
+
+    <!-- Main chat area -->
+    <div class="chat-container">
+      <div class="chat-header">
+        <button id="sidebar-toggle" class="sidebar-toggle" title="Toggle sidebar">&#9776;</button>
+        <h1>AI Agent Chat</h1>
+        <span id="conv-status" class="conv-status"></span>
+      </div>
+      <div id="chat-window" class="chat-window">
+        <!-- Messages will appear here -->
+      </div>
+      <form id="chat-form" class="chat-form">
+        <input type="text" id="chat-input" placeholder="Type your prompt..." autocomplete="off" required />
+        <button type="submit" id="send-btn">Send</button>
+      </form>
     </div>
-    <div id="chat-window" class="chat-window">
-      <!-- Messages will appear here -->
-    </div>
-    <form id="chat-form" class="chat-form">
-      <input type="text" id="chat-input" placeholder="Type your prompt..." autocomplete="off" required />
-      <button type="submit">Send</button>
-    </form>
   </div>
   <script src="/static/script.js"></script>
 </body>

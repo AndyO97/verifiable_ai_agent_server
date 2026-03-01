@@ -69,6 +69,20 @@ class SecurityMiddleware:
         for tool in tools:
             self.auth_manager.register_tool(tool)
     
+    def register_from_mcp_server(self, mcp_server) -> None:
+        """
+        Register authorized tools from an MCPServer instance.
+        Extracts all registered tool names and adds them to the whitelist.
+        """
+        if hasattr(mcp_server, 'tools') and mcp_server.tools:
+            tool_names = list(mcp_server.tools.keys())
+            self.register_authorized_tools(tool_names)
+            logger.info(
+                "security_middleware_initialized",
+                authorized_tools=tool_names,
+                count=len(tool_names)
+            )
+    
     def validate_tool_invocation(self, session_id: str, tool_name: str) -> bool:
         """
         Validate that a tool invocation is authorized.
@@ -78,4 +92,9 @@ class SecurityMiddleware:
             self.auth_manager.handle_unauthorized_access(session_id, tool_name)
             return False
         
+        logger.info(
+            "tool_invocation_authorized",
+            session_id=session_id,
+            tool_name=tool_name
+        )
         return True
