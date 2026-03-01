@@ -1,12 +1,44 @@
 # 🎉 Project Summary: Verifiable AI Agent Server
 
 **Status:** Feature-complete and production-ready  
-**Last Updated:** February 21, 2026  
+**Last Updated:** March 1, 2026  
 **Test Suite:** 128+ tests passing ✅
 
 ---
 
-## 🔄 Latest Session Updates (February 21, 2026)
+## 🔄 Latest Session Updates (March 1, 2026)
+
+### ✅ AI Agent Chat Server (Backend + Frontend)
+- FastAPI backend (`backend/server.py`) serving a web chat interface at http://localhost:8000
+- Conversation management: create, resume after restart, finalize, and delete (DB + workflow folder + Langfuse traces)
+- Per-prompt Verkle roots with conversation-level accumulator for full session commitment
+- 5 integrated tools: weather (OpenWeatherMap), currency exchange, math calculator, Wikipedia search, datetime
+- SQLite persistence (conversations, messages, prompt_roots tables) with PostgreSQL option
+- Backward-compatible `/api/chat` endpoint for single-prompt usage
+
+### ✅ HTTP Transport Security
+- HMAC-SHA256 request signing via `HTTPSecurityMiddleware` (all `/api/` routes)
+- Session tokens (1-hour TTL) + HMAC keys exchanged on `/api/session/init`
+- Nonce-based anti-replay protection (2-minute cache, never reused)
+- Timestamp freshness (±30 seconds)
+- Rate limiting (60 requests/min/IP)
+- CORS restricted to same-origin (`localhost:8000`)
+- Browser uses Web Crypto API for native HMAC signing
+
+### ✅ Frontend Chat UI
+- Collapsible conversation sidebar with history, date, message counts, and Active/Finalized badges
+- Delete button per conversation with confirmation dialog, auto-selects most recent after deletion
+- Auto-selects most recent conversation on page load
+- All API calls go through `secureFetch()` with automatic HMAC header injection
+- Disable input for finalized conversations, guard against sending without a selected conversation
+
+### ✅ CLI Multi-Tool Demo
+- `examples/agent_multi_tool_demo.py`: standalone demo with same 5 tools and 5 predefined prompts
+- Produces full workflow folder with canonical logs, commitments, and OTel export
+
+---
+
+## 🔄 Previous Session Updates (February 21, 2026)
 
 ### ✅ Span Root Calculation Fixed
 - Fixed HierarchicalVerkleMiddleware to properly capture events in both flat AND span accumulators
@@ -47,9 +79,11 @@
 | Metric | Value |
 |--------|-------|
 | **Architecture** | HierarchicalVerkleMiddleware + Hierarchical Spans + MCP 2024-11 JSON-RPC 2.0 |
+| **Chat Server** | FastAPI backend + web frontend with HMAC-SHA256 transport security |
 | **Cryptography** | Per-Span + Session-Level KZG commitments on BLS12-381, deterministic via RFC 8785 |
+| **HTTP Security** | HMAC-SHA256 signing, session tokens, nonce anti-replay, rate limiting, CORS |
 | **Test Coverage** | 128+ tests (core features + integration) |
-| **Demos** | 3 production demos with hierarchical spans (real_prompt_demo, real_agent_demo, agent_remote_demo) |
+| **Demos** | 1 chat server + 3 CLI demos + 1 CLI multi-tool demo |
 | **Validation** | ✅ All demos tested with real LLM calls and Langfuse integration |
 | **Local Storage** | 5 files per run: canonical_log.jsonl, spans_structure.json, commitments.json, metadata.json, otel_export.json |
 

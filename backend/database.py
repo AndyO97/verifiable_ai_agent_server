@@ -12,10 +12,8 @@ Setup:
       pip install psycopg2-binary
 """
 
-import json
 import os
 import sqlite3
-from datetime import datetime
 from typing import Optional
 
 # Try to import PostgreSQL driver
@@ -56,6 +54,9 @@ class DatabaseBackend:
         raise NotImplementedError
 
     def get_messages(self, conversation_id: str) -> list[dict]:
+        raise NotImplementedError
+
+    def delete_conversation(self, conversation_id: str) -> bool:
         raise NotImplementedError
 
     def close(self):
@@ -196,6 +197,19 @@ class SQLiteBackend(DatabaseBackend):
             (conversation_id,)
         ).fetchall()
         return [dict(row) for row in rows]
+
+    def delete_conversation(self, conversation_id: str) -> bool:
+        """Delete a conversation and all related records (messages, prompt_roots)."""
+        try:
+            self.conn.execute("DELETE FROM prompt_roots WHERE conversation_id = ?", (conversation_id,))
+            self.conn.execute("DELETE FROM messages WHERE conversation_id = ?", (conversation_id,))
+            self.conn.execute("DELETE FROM conversations WHERE conversation_id = ?", (conversation_id,))
+            self.conn.commit()
+            logger.info("sqlite_conversation_deleted", conversation_id=conversation_id)
+            return True
+        except Exception as e:
+            logger.error("sqlite_delete_failed", conversation_id=conversation_id, error=str(e))
+            return False
 
     def close(self):
         if self.conn:
@@ -349,6 +363,20 @@ class PostgreSQLBackend(DatabaseBackend):
                 (conversation_id,)
             )
             return [dict(row) for row in cur.fetchall()]
+
+    def delete_conversation(self, conversation_id: str) -> bool:
+        """Delete a conversation and all related records (messages, prompt_roots)."""
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute("DELETE FROM prompt_roots WHERE conversation_id = %s", (conversation_id,))
+                cur.execute("DELETE FROM messages WHERE conversation_id = %s", (conversation_id,))
+                cur.execute("DELETE FROM conversations WHERE conversation_id = %s", (conversation_id,))
+            self.conn.commit()
+            logger.info("postgres_conversation_deleted", conversation_id=conversation_id)
+            return True
+        except Exception as e:
+            logger.error("postgres_delete_failed", conversation_id=conversation_id, error=str(e))
+            return False
 
     def close(self):
         if self.conn:
