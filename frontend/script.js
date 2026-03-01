@@ -10,6 +10,103 @@ const conversationList = document.getElementById('conversation-list');
 
 let currentConversationId = null;
 
+// --- HTTP Security: Session + HMAC signing ---
+
+let sessionToken = null;
+let hmacKeyHex = null;
+let cryptoKey = null;  // CryptoKey object for HMAC-SHA256
+
+/**
+ * Initialize an authenticated HTTP session with the server.
+ * Receives session_token + hmac_key for signing subsequent requests.
+ */
+async function initSession() {
+  try {
+    const res = await fetch('/api/session/init', { method: 'POST' });
+    const data = await res.json();
+    sessionToken = data.session_token;
+    hmacKeyHex = data.hmac_key;
+
+    // Import HMAC key into Web Crypto API
+    const keyBytes = hexToBytes(hmacKeyHex);
+    cryptoKey = await crypto.subtle.importKey(
+      'raw', keyBytes, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
+    );
+
+    console.log('Secure session initialized:', sessionToken.slice(0, 8) + '...');
+  } catch (e) {
+    console.error('Failed to initialize secure session:', e);
+  }
+}
+
+/** Convert hex string to Uint8Array */
+function hexToBytes(hex) {
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < hex.length; i += 2) {
+    bytes[i / 2] = parseInt(hex.substr(i, 2), 16);
+  }
+  return bytes;
+}
+
+/** Convert ArrayBuffer to hex string */
+function bufferToHex(buffer) {
+  return Array.from(new Uint8Array(buffer))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+/** Generate a cryptographically random nonce (32 hex chars) */
+function generateNonce() {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+/**
+ * Compute HMAC-SHA256 signature for a request.
+ * message = "{timestamp}|{nonce}|{method}|{path}|{body}"
+ */
+async function signRequest(timestamp, nonce, method, path, body) {
+  const message = `${timestamp}|${nonce}|${method}|${path}|${body}`;
+  const encoded = new TextEncoder().encode(message);
+  const sig = await crypto.subtle.sign('HMAC', cryptoKey, encoded);
+  return bufferToHex(sig);
+}
+
+/**
+ * Wrapper for fetch() that automatically adds security headers.
+ * All /api/ calls should go through this.
+ */
+async function secureFetch(url, options = {}) {
+  if (!sessionToken || !cryptoKey) {
+    // Session not initialized yet, try to init
+    await initSession();
+    if (!sessionToken) {
+      throw new Error('No secure session available');
+    }
+  }
+
+  const method = (options.method || 'GET').toUpperCase();
+  const body = options.body || '';
+  const timestamp = Date.now().toString();
+  const nonce = generateNonce();
+
+  // Extract path from URL (handles both absolute and relative)
+  const path = new URL(url, window.location.origin).pathname;
+
+  const signature = await signRequest(timestamp, nonce, method, path, body);
+
+  const headers = {
+    ...(options.headers || {}),
+    'X-Session-Token': sessionToken,
+    'X-Timestamp': timestamp,
+    'X-Nonce': nonce,
+    'X-Signature': signature,
+  };
+
+  return fetch(url, { ...options, headers });
+}
+
 // --- Sidebar toggle ---
 
 sidebarToggle.addEventListener('click', () => {
@@ -20,7 +117,7 @@ sidebarToggle.addEventListener('click', () => {
 
 async function loadConversationList() {
   try {
-    const res = await fetch('/api/conversations');
+    const res = await secureFetch('/api/conversations');
     const conversations = await res.json();
     renderConversationList(conversations);
   } catch (e) {
@@ -43,11 +140,26 @@ function renderConversationList(conversations) {
       item.classList.add('active');
     }
 
+    const topRow = document.createElement('div');
+    topRow.classList.add('conv-top-row');
+
     const title = document.createElement('div');
     title.classList.add('conv-title');
     // Use first message preview or session_id snippet as title
     const displayId = conv.session_id || conv.conversation_id;
-    title.textContent = displayId.length > 28 ? displayId.slice(0, 28) + '…' : displayId;
+    title.textContent = displayId.length > 24 ? displayId.slice(0, 24) + '…' : displayId;
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.classList.add('conv-delete-btn');
+    deleteBtn.title = 'Delete conversation';
+    deleteBtn.innerHTML = '&#128465;';  // wastebasket icon
+    deleteBtn.addEventListener('click', (e) => {
+      e.stopPropagation();  // Don't trigger switchToConversation
+      deleteConversation(conv.conversation_id);
+    });
+
+    topRow.appendChild(title);
+    topRow.appendChild(deleteBtn);
 
     const meta = document.createElement('div');
     meta.classList.add('conv-meta');
@@ -79,12 +191,58 @@ function renderConversationList(conversations) {
     meta.appendChild(countSpan);
     meta.appendChild(badge);
 
-    item.appendChild(title);
+    item.appendChild(topRow);
     item.appendChild(meta);
 
     item.addEventListener('click', () => switchToConversation(conv));
     conversationList.appendChild(item);
   });
+}
+
+async function deleteConversation(conversationId) {
+  if (!confirm('Delete this conversation?\nThis will remove it from the database, workflow files, and Langfuse.')) {
+    return;
+  }
+
+  try {
+    const res = await secureFetch(`/api/conversations/${conversationId}`, {
+      method: 'DELETE',
+    });
+    const data = await res.json();
+
+    if (data.error) {
+      alert('Delete failed: ' + data.error);
+      return;
+    }
+
+    const wasActive = conversationId === currentConversationId;
+
+    await loadConversationList();
+
+    // If deleted conversation was active, auto-select the most recent remaining one
+    if (wasActive) {
+      const res = await secureFetch('/api/conversations');
+      const convs = await res.json();
+      
+      if (convs && convs.length > 0) {
+        // Auto-select the first (most recent) conversation
+        const nextConv = convs[0];
+        await switchToConversation(nextConv);
+        addMessage('Previous conversation deleted. Switched to most recent.', 'agent');
+      } else {
+        // No conversations left
+        currentConversationId = null;
+        updateStatus('No conversations. Click "+ New" to create one.');
+        clearChat();
+        chatInput.disabled = true;
+        sendBtn.disabled = true;
+        chatInput.placeholder = 'Click "+ New" to create a conversation';
+      }
+    }
+  } catch (e) {
+    console.error('Failed to delete conversation:', e);
+    alert('Error deleting conversation: ' + e);
+  }
 }
 
 async function switchToConversation(conv) {
@@ -108,7 +266,7 @@ async function switchToConversation(conv) {
 
   // Load messages
   try {
-    const res = await fetch(`/api/conversations/${conv.conversation_id}/messages`);
+    const res = await secureFetch(`/api/conversations/${conv.conversation_id}/messages`);
     const messages = await res.json();
     if (Array.isArray(messages)) {
       messages.forEach(msg => {
@@ -134,7 +292,7 @@ async function switchToConversation(conv) {
 
 async function startConversation() {
   try {
-    const res = await fetch('/api/conversations', { method: 'POST' });
+    const res = await secureFetch('/api/conversations', { method: 'POST' });
     const data = await res.json();
     currentConversationId = data.conversation_id;
     updateStatus('Session active');
@@ -191,6 +349,12 @@ async function sendMessage(e) {
   const prompt = chatInput.value.trim();
   if (!prompt) return;
 
+  // Safeguard: prevent sending if no conversation selected
+  if (!currentConversationId) {
+    addMessage('Error: No conversation selected. Click a conversation or create a new one.', 'agent');
+    return;
+  }
+
   addMessage(prompt, 'user');
   chatInput.value = '';
   sendBtn.disabled = true;
@@ -208,7 +372,7 @@ async function sendMessage(e) {
       body = JSON.stringify({ prompt });
     }
 
-    const res = await fetch(url, {
+    const res = await secureFetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: body,
@@ -243,7 +407,7 @@ async function handleNewChat() {
   // Finalize current conversation if one exists
   if (currentConversationId) {
     try {
-      await fetch(`/api/conversations/${currentConversationId}/finalize`, { method: 'POST' });
+      await secureFetch(`/api/conversations/${currentConversationId}/finalize`, { method: 'POST' });
       console.log('Previous conversation finalized:', currentConversationId);
     } catch (e) {
       console.error('Failed to finalize conversation:', e);
@@ -273,8 +437,20 @@ if (newChatBtn) {
 // --- Initialize ---
 
 async function init() {
+  await initSession();
   await loadConversationList();
-  await startConversation();
+
+  // Auto-select the most recent conversation, or prompt user to create one
+  const res = await secureFetch('/api/conversations');
+  const convs = await res.json();
+  if (convs && convs.length > 0) {
+    await switchToConversation(convs[0]);
+  } else {
+    chatInput.disabled = true;
+    sendBtn.disabled = true;
+    chatInput.placeholder = 'Click "+ New" to create a conversation';
+    updateStatus('No conversations yet');
+  }
 }
 
 init();

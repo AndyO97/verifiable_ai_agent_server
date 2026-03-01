@@ -2,15 +2,20 @@
 
 A high-integrity, self-hosted AI Agent Server built on the Model Context Protocol (MCP) with cryptographic commitment of all agent–LLM–tool interactions into a **Verkle Tree**.
 
-## 📋 Latest Updates (February 21, 2026)
+## 📋 Latest Updates (March 1, 2026)
 
-- **Demo Commands Improved**: All verification commands now include `.\\venv\\Scripts\\Activate.ps1` prefix for copy-paste readiness
-- **Root Type Corrected**: Manual verification commands now use correct `session_root` for canonical_log.jsonl (span_commitment events)
-- **Agent Response Completeness**: Increased `max_turns` from 3-5 to 8 for complete multi-turn interactions
-- **Remote Tool Feedback**: Added startup status messages ([STARTING], [WAITING], [STOPPED])
+- **AI Agent Chat Server**: Full-featured web chat interface with FastAPI backend — the primary way to interact with the agent and its tools
+- **Conversation Management**: Create, resume, finalize, and delete conversations with full DB + workflow + Langfuse cleanup
+- **HTTP Transport Security**: HMAC-SHA256 request signing, anti-replay nonces, session tokens, rate limiting — all transparent to the user
+- **Conversation History Sidebar**: Browse, switch, and manage past conversations from a collapsible sidebar
+- **5 Integrated Tools**: Weather (OpenWeatherMap), Currency Exchange, Math Calculator, Wikipedia Search, Datetime — all with IBS-signed outputs
+- **Conversation Resume**: Seamlessly continue conversations after server restart
+- **Per-Prompt Verkle Roots**: Each prompt/response pair gets its own cryptographic commitment; conversation-level root combines them all
 
 ## 🎯 Core Features
 
+- **Web Chat Interface**: Full-featured AI agent chat with FastAPI backend, conversation sidebar, and per-prompt Verkle roots
+- **HTTP Transport Security**: HMAC-SHA256 request signing, session tokens, nonce-based anti-replay, rate limiting, and CORS restrictions
 - **Immutable Run Logs**: All agent interactions (prompts, tool calls, model outputs) are canonically encoded and cryptographically committed
 - **Deterministic Verifiability**: Every run produces a single Verkle root commitment (KZG on BLS12-381) that can be independently verified
 - **MCP 2024-11 Compliance**: Full JSON-RPC 2.0 protocol support with proper initialization handshake and request ID correlation
@@ -34,27 +39,6 @@ A high-integrity, self-hosted AI Agent Server built on the Model Context Protoco
 
 
 ### Installation (Recommended: uv)
----
-
-## 🌐 Backend Web Server (FastAPI)
-
-To run the web frontend and chat API, you need FastAPI and Uvicorn installed in your virtual environment:
-
-```powershell
-# Activate your virtual environment
-.\venv\Scripts\Activate.ps1
-
-# Install FastAPI and Uvicorn
-pip install fastapi uvicorn
-```
-
-Then start the backend server:
-
-```powershell
-python backend/server.py
-```
-
-Visit http://localhost:8000 in your browser to use the chat interface.
 
 #### Option 1: Automated Setup (Recommended)
 
@@ -93,25 +77,99 @@ python -m pytest tests/ -v
 
 ---
 
-## 🌐 Backend Web Server (FastAPI)
+## 🌐 AI Agent Chat Server (⭐ Primary Feature)
 
-To run the web frontend and chat API, you need FastAPI and Uvicorn installed in your virtual environment:
+The chat server is the main way to interact with the Verifiable AI Agent. It provides a full-featured web chat interface backed by FastAPI, with per-prompt cryptographic integrity, conversation management, and HTTP transport security — all accessible from your browser.
+
+### How to Run
 
 ```powershell
-# Activate your virtual environment
+# 1. Activate virtual environment
 .\venv\Scripts\Activate.ps1
 
-# Install FastAPI and Uvicorn
+# 2. Install server dependencies (if not already)
 pip install fastapi uvicorn
-```
 
-Then start the backend server:
-
-```powershell
+# 3. Start the server
 python backend/server.py
 ```
 
-Visit http://localhost:8000 in your browser to use the chat interface.
+Open **http://localhost:8000** in your browser. The chat interface loads automatically.
+
+### Chat Interface Features
+
+| Feature | Description |
+|---------|-------------|
+| **Conversation Sidebar** | Collapsible sidebar lists all conversations with date, message count, and status badges (Active / Finalized). Click to switch, use the wastebasket button to delete. |
+| **Multiple Conversations** | Create new conversations with the "+ New" button. The previous conversation is automatically finalized (Verkle root computed). |
+| **Conversation Resume** | Conversations persist in SQLite. Restarting the server does not lose any data — conversations resume seamlessly. |
+| **Conversation Deletion** | Delete a conversation entirely: removes DB records, workflow artifacts on disk, and Langfuse traces (best-effort). Auto-selects the most recent remaining conversation. |
+| **5 Integrated Tools** | The agent has access to: **Weather** (OpenWeatherMap), **Currency Exchange** (exchangerate-api), **Math Calculator** (local eval), **Wikipedia Search** (REST API), **Datetime** (local). The LLM decides which tools to invoke. |
+| **Per-Prompt Verkle Roots** | Every prompt/response pair gets its own cryptographic Verkle root. The sidebar shows verified status per prompt. |
+| **Conversation-Level Root** | When finalized, a conversation-level Verkle root is computed from all prompt roots — a single commitment covering the entire chat history. |
+| **IBS Tool Signatures** | Tool outputs are cryptographically signed using Identity-Based Signatures (Cha-Cheon over BLS12-381). Keys are derived from tool names — no PKI required. |
+| **Langfuse Observability** | All interactions are traced to Langfuse (if configured) with session grouping, per-turn generations, and cost tracking. |
+| **Auto-Select on Load** | On page load, the most recent conversation is automatically selected and its messages displayed. |
+
+### HTTP Transport Security
+
+All API requests between the browser and server are cryptographically protected:
+
+```
+Browser                                   FastAPI Server
+───────                                   ──────────────
+1. POST /api/session/init  ──────────>    Generate session_token + hmac_key
+   <────── { session_token, hmac_key }
+
+2. Every subsequent API call includes:
+   Headers:
+     X-Session-Token: <token>
+     X-Timestamp:     <unix_ms>
+     X-Nonce:         <random_hex>
+     X-Signature:     HMAC-SHA256(hmac_key, timestamp|nonce|method|path|body)
+
+   Server validates:
+     ✓ Token exists and not expired (1-hour TTL)
+     ✓ Timestamp within ±30s window (anti-replay)
+     ✓ Nonce never reused (anti-replay, 2-min cache)
+     ✓ HMAC signature matches (tamper resistance)
+     ✓ Rate limit not exceeded (60 req/min/IP)
+```
+
+- **Session Tokens**: 48-character hex tokens with 1-hour TTL, generated via `os.urandom(24)`
+- **HMAC Keys**: 64-character hex keys (256-bit), generated via `os.urandom(32)`
+- **Browser Signing**: Uses the Web Crypto API (`crypto.subtle.importKey` + `crypto.subtle.sign`) for native HMAC-SHA256
+- **CORS Restriction**: Only `http://127.0.0.1:8000` and `http://localhost:8000` are allowed origins
+- **Bypass Paths**: Static assets, favicon, and `/api/session/init` bypass HMAC checks
+
+### API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/session/init` | Initialize HMAC session (returns token + key) |
+| `POST` | `/api/conversations` | Create a new conversation |
+| `GET` | `/api/conversations` | List all conversations (newest first) |
+| `POST` | `/api/conversations/{id}/chat` | Send a prompt within a conversation |
+| `POST` | `/api/conversations/{id}/finalize` | Finalize and compute conversation root |
+| `GET` | `/api/conversations/{id}/messages` | Get all messages for a conversation |
+| `DELETE` | `/api/conversations/{id}` | Delete conversation (DB + workflow + Langfuse) |
+| `POST` | `/api/chat` | Simple one-shot chat (backward compatible) |
+
+### Architecture
+
+```
+frontend/
+  index.html          # Chat UI with sidebar layout
+  script.js           # HMAC signing, conversation management, secureFetch()
+  style.css           # Responsive layout, sidebar, badges
+
+backend/
+  server.py           # FastAPI app with all endpoints + security middleware
+  agent_backend.py    # MCP server with 5 tools, SecurityMiddleware
+  conversation_manager.py  # Per-conversation sessions, Verkle lifecycle
+  database.py         # SQLite/PostgreSQL abstraction (conversations, messages, prompt_roots)
+  http_security.py    # HTTPSecurityManager + HTTPSecurityMiddleware (HMAC, nonces, rate limits)
+```
 
 ### Why uv?
 
@@ -181,13 +239,25 @@ The project supports two LLM providers. Choose one:
 
 **Project Structure:**
 ```
+backend/                     # FastAPI chat server
+  server.py                  #   Main server with all API endpoints
+  agent_backend.py           #   MCP server with 5 tools
+  conversation_manager.py    #   Conversation session lifecycle
+  database.py                #   SQLite/PostgreSQL persistence
+  http_security.py           #   HMAC + nonce + rate-limit middleware
+frontend/                    # Browser chat UI
+  index.html                 #   Chat page with sidebar
+  script.js                  #   HMAC signing + conversation management
+  style.css                  #   Responsive layout + sidebar styles
 real_prompt_demo.py          # Demo: Simple Q&A with integrity tracking
 real_agent_demo.py           # Demo: Multi-tool agent with tool invocation
+examples/
+  agent_multi_tool_demo.py   # Demo: CLI multi-tool agent (5 tools, 5 prompts)
+  agent_remote_demo.py       # Demo: Secure remote tool invocation
+  remote_tool.py             # Remote tool used in agent_remote_demo.py
 run_all_tests.py             # Run all tests with progress tracking
 pyproject.toml               # uv/pip compatible dependencies
 setup.ps1                    # Automated setup script (Windows)
-examples/agent_remote_demo.py# Demo: Secure remote tool invocation
-examples/remote_tool.py      # Remote tool used in the agent_remote_demo.py 
 docker-compose.yml           # Langfuse self-hosted deployment
 README.md                    # This file (comprehensive guide)
 PROJECT_SUMMARY.md           # Project status & future work
@@ -197,8 +267,11 @@ OLLAMA_SETUP_GUIDE.txt       # Alternative LLM provider guide
 ```
 
 **Key Files:**
+- `backend/server.py` - Chat server entry point (run with `python backend/server.py`)
+- `backend/agent_backend.py` - MCP server with 5 tools shared by chat server and CLI demos
 - `real_prompt_demo.py` - Entry point for simple demo with Langfuse tracing
 - `real_agent_demo.py` - Entry point for agent demo with tool invocation
+- `examples/agent_multi_tool_demo.py` - CLI multi-tool demo (5 tools, 5 prompts)
 - `examples/agent_remote_demo.py` - Entry point for agent demo with remote tool invocation
 - `run_all_tests.py` - Run all tests with progress tracking
 - `.env` - Local configuration (credentials, API keys, not in git)
@@ -290,9 +363,20 @@ Public verification CLI for independent run validation. Three commands: `verify`
 
 ---
 
-## 🎬 Live Demos (Main Features)
+## 🎬 Live Demos
 
-The two **flagship demonstrations** showcase the core project capabilities:
+> **Tip:** The best way to experience the agent is through the **Chat Server** (see [AI Agent Chat Server](#-ai-agent-chat-server--primary-feature) above). The demos below are standalone scripts useful for understanding the cryptographic internals.
+
+### CLI Demo: Multi-Tool Agent (agent_multi_tool_demo.py)
+
+A standalone CLI demo with the same 5 tools as the chat server (weather, currency, math, wikipedia, datetime) and 5 predefined prompts for quick testing:
+
+```powershell
+.\venv\Scripts\Activate.ps1
+python examples/agent_multi_tool_demo.py
+```
+
+Change `PROMPT_INDEX` in the script to select which prompt/tool combination to test. Produces a full workflow folder with canonical logs, commitments, and OTel export.
 
 ### Demo 1: Real Prompt Demo - MCP 2024-11 + Integrity Tracking
 
@@ -1371,7 +1455,10 @@ Contributions welcome! Please:
 A: Canonicalization and hashing add ~10-50ms per run (TBD after profiling). KZG polynomial commitments provide O(1) compact proof verification.
 
 **Q: Can I run this on a commodity server?**
-A: Yes! The only hard requirement is PostgreSQL.
+A: Yes! SQLite is the default (zero configuration). PostgreSQL is optional for production counter persistence.
+
+**Q: How do I use the chat interface?**
+A: Run `python backend/server.py`, open http://localhost:8000, and start chatting. The agent has 5 tools it can invoke based on your prompts. All interactions are cryptographically committed.
 
 **Q: Is this suitable for production?**
 A: Yes, the core integrity tracking, Verkle tree commitments, and verification CLI are production-ready. See PROJECT_SUMMARY.md for current status.

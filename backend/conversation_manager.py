@@ -16,6 +16,7 @@ Architecture:
 import hashlib
 import json
 import os
+import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -346,6 +347,79 @@ class ConversationManager:
         """Get an existing conversation by ID."""
         return self.conversations.get(conversation_id)
 
+    def resume_conversation(self, conversation_id: str, db_data: dict, messages: list[dict]) -> Conversation:
+        """
+        Resume a conversation from a previous server session.
+
+        Reconstructs a Conversation object from database data so that
+        new prompts can be sent to it. Prior canonical events and Verkle
+        roots are reloaded from disk if available.
+
+        Args:
+            conversation_id: The conversation ID to resume.
+            db_data: Row from the conversations table.
+            messages: Prior messages from the messages table.
+
+        Returns:
+            The resumed Conversation object (also cached in self.conversations).
+        """
+        conv = Conversation(
+            conversation_id=conversation_id,
+            mcp_server=self.mcp_server,
+            security_middleware=self.security_middleware,
+        )
+        # Restore metadata
+        conv.created_at = db_data.get("created_at", conv.created_at)
+
+        # Restore messages
+        for msg in messages:
+            conv.messages.append({
+                "role": msg["role"],
+                "content": msg["content"],
+                "timestamp": msg.get("timestamp", ""),
+                "prompt_index": msg.get("prompt_index", 0),
+            })
+
+        # Reload canonical events and prompt roots from disk if available
+        workflow_dir = conv.workflow_dir
+        canonical_log_path = workflow_dir / "canonical_log.json"
+        if canonical_log_path.exists():
+            try:
+                with open(canonical_log_path) as f:
+                    conv.all_canonical_events = json.load(f)
+            except Exception as e:
+                logger.warning("failed_to_load_canonical_log", error=str(e))
+
+        prompt_roots_path = workflow_dir / "prompt_roots.json"
+        if prompt_roots_path.exists():
+            try:
+                with open(prompt_roots_path) as f:
+                    conv.prompt_roots = json.load(f)
+            except Exception as e:
+                logger.warning("failed_to_load_prompt_roots", error=str(e))
+
+        # Re-populate conversation accumulator with prior prompt roots
+        for pr in conv.prompt_roots:
+            if pr.get("prompt_root"):
+                conv.conversation_accumulator.add_event({
+                    "counter": pr.get("prompt_index", 0),
+                    "type": "prompt_root",
+                    "session_id": pr.get("prompt_session_id", ""),
+                    "prompt_root": pr["prompt_root"],
+                })
+
+        self.conversations[conversation_id] = conv
+
+        logger.info(
+            "conversation_resumed",
+            conversation_id=conversation_id,
+            messages_restored=len(conv.messages),
+            prompt_roots_restored=len(conv.prompt_roots),
+            canonical_events_restored=len(conv.all_canonical_events),
+        )
+
+        return conv
+
     def list_conversations(self) -> list[dict]:
         """List all conversations with metadata."""
         return [conv.get_summary() for conv in self.conversations.values()]
@@ -356,6 +430,47 @@ class ConversationManager:
         if not conversation:
             return {"error": f"Conversation {conversation_id} not found."}
         return conversation.finalize()
+
+    def delete_conversation(self, conversation_id: str) -> dict:
+        """
+        Delete a conversation from memory and its workflow directory from disk.
+
+        Args:
+            conversation_id: The conversation ID to delete.
+
+        Returns:
+            dict with 'deleted' key (True/False) and details.
+        """
+        # Remove from in-memory cache
+        conv = self.conversations.pop(conversation_id, None)
+
+        # Determine workflow directory
+        session_id = f"chat-{conversation_id}"
+        workflow_dir = Path("workflows") / f"workflow_{session_id}"
+
+        # Delete workflow folder
+        dir_deleted = False
+        if workflow_dir.exists():
+            try:
+                shutil.rmtree(workflow_dir)
+                dir_deleted = True
+                logger.info("workflow_dir_deleted", path=str(workflow_dir))
+            except Exception as e:
+                logger.warning("workflow_dir_delete_failed", path=str(workflow_dir), error=str(e))
+
+        logger.info(
+            "conversation_deleted",
+            conversation_id=conversation_id,
+            was_in_memory=conv is not None,
+            workflow_dir_deleted=dir_deleted,
+        )
+
+        return {
+            "deleted": True,
+            "conversation_id": conversation_id,
+            "was_in_memory": conv is not None,
+            "workflow_dir_deleted": dir_deleted,
+        }
 
     def finalize_all(self) -> list[dict]:
         """Finalize all active (non-finalized) conversations."""

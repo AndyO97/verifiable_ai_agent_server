@@ -21,14 +21,22 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 import os
 import sys
+
+import requests as http_requests
+from requests.auth import HTTPBasicAuth
 
 # Import backend modules
 sys.path.append(os.path.abspath(os.path.dirname(__file__)))
 from agent_backend import mcp_server, security_middleware
 from conversation_manager import ConversationManager
 from database import create_database
+from http_security import HTTPSecurityManager, HTTPSecurityMiddleware
+
+# Config
+from src.config import get_settings
 
 
 @asynccontextmanager
@@ -41,6 +49,18 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
+# --- HTTP Transport Security ---
+http_security = HTTPSecurityManager()
+app.add_middleware(HTTPSecurityMiddleware, security_manager=http_security)
+
+# CORS: restrict to same origin only (no cross-origin API access)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://127.0.0.1:8000", "http://localhost:8000"],
+    allow_methods=["GET", "POST", "DELETE"],
+    allow_headers=["Content-Type", "X-Session-Token", "X-Timestamp", "X-Nonce", "X-Signature"],
+)
 
 # Initialize database (SQLite by default, PostgreSQL if DATABASE_URL is set)
 db = create_database()
@@ -64,6 +84,19 @@ def favicon():
     return HTMLResponse("")
 
 
+# --- Session initialization (HMAC key exchange) ---
+
+@app.post("/api/session/init")
+async def init_session(request: Request):
+    """
+    Initialize an authenticated HTTP session.
+    Returns a session token and HMAC key for signing subsequent requests.
+    No prior authentication required (first contact).
+    """
+    client_ip = request.client.host if request.client else "unknown"
+    return http_security.create_session(client_ip)
+
+
 # --- Conversation API ---
 
 @app.post("/api/conversations")
@@ -85,8 +118,16 @@ async def list_conversations():
 async def chat_in_conversation(conversation_id: str, request: Request):
     """Send a prompt within an existing conversation."""
     conv = conv_manager.get_conversation(conversation_id)
+
+    # If not in memory, try to resume from database
     if not conv:
-        return {"error": f"Conversation {conversation_id} not found. Create one first."}
+        db_record = db.get_conversation(conversation_id)
+        if not db_record:
+            return {"error": f"Conversation {conversation_id} not found. Create one first."}
+        if db_record.get("is_finalized"):
+            return {"error": f"Conversation {conversation_id} is finalized (read-only)."}
+        messages = db.get_messages(conversation_id)
+        conv = conv_manager.resume_conversation(conversation_id, db_record, messages)
 
     data = await request.json()
     prompt = data.get("prompt", "")
@@ -128,7 +169,19 @@ async def chat_in_conversation(conversation_id: str, request: Request):
 @app.post("/api/conversations/{conversation_id}/finalize")
 async def finalize_conversation(conversation_id: str):
     """Finalize a conversation: compute conversation-level Verkle root and save workflow."""
-    result = conv_manager.finalize_conversation(conversation_id)
+    conv = conv_manager.get_conversation(conversation_id)
+
+    # Resume from DB if not in memory
+    if not conv:
+        db_record = db.get_conversation(conversation_id)
+        if not db_record:
+            return {"error": f"Conversation {conversation_id} not found."}
+        if db_record.get("is_finalized"):
+            return {"error": f"Conversation {conversation_id} is already finalized."}
+        messages = db.get_messages(conversation_id)
+        conv = conv_manager.resume_conversation(conversation_id, db_record, messages)
+
+    result = conv.finalize()
     if "error" not in result:
         db.save_integrity(conversation_id, result)
     return result
@@ -138,6 +191,81 @@ async def finalize_conversation(conversation_id: str):
 async def get_conversation_messages(conversation_id: str):
     """Get all messages for a conversation."""
     return db.get_messages(conversation_id)
+
+
+@app.delete("/api/conversations/{conversation_id}")
+async def delete_conversation(conversation_id: str):
+    """
+    Delete a conversation entirely:
+    1. Remove from in-memory ConversationManager + delete workflow folder
+    2. Delete from database (conversations, messages, prompt_roots tables)
+    3. Delete Langfuse traces for this session (best-effort)
+    """
+    # Check it exists
+    db_record = db.get_conversation(conversation_id)
+    if not db_record:
+        return {"error": f"Conversation {conversation_id} not found."}
+
+    # 1. Memory + workflow directory cleanup
+    conv_result = conv_manager.delete_conversation(conversation_id)
+
+    # 2. Database cleanup
+    db_deleted = db.delete_conversation(conversation_id)
+
+    # 3. Langfuse cleanup (best-effort)
+    langfuse_deleted = _delete_langfuse_session(f"chat-{conversation_id}")
+
+    return {
+        "deleted": True,
+        "conversation_id": conversation_id,
+        "db_deleted": db_deleted,
+        "workflow_dir_deleted": conv_result.get("workflow_dir_deleted", False),
+        "langfuse_deleted": langfuse_deleted,
+    }
+
+
+def _delete_langfuse_session(session_id: str) -> dict:
+    """
+    Delete all Langfuse traces associated with a session ID.
+    Uses the Langfuse REST API: GET traces by sessionId, then DELETE each trace.
+    Best-effort — returns status without raising on failure.
+    """
+    try:
+        settings = get_settings()
+        endpoint = settings.langfuse.api_endpoint
+        pub_key = settings.langfuse.public_key
+        sec_key = settings.langfuse.secret_key
+
+        if not pub_key or not sec_key:
+            return {"skipped": True, "reason": "no_credentials"}
+
+        auth = HTTPBasicAuth(pub_key, sec_key)
+
+        # List traces for this session
+        list_url = f"{endpoint}/api/public/traces?sessionId={session_id}"
+        resp = http_requests.get(list_url, auth=auth, timeout=10)
+        if resp.status_code != 200:
+            return {"skipped": True, "reason": f"list_failed_{resp.status_code}"}
+
+        traces = resp.json().get("data", [])
+        if not traces:
+            return {"traces_deleted": 0}
+
+        # Delete each trace
+        deleted_count = 0
+        for trace in traces:
+            trace_id = trace.get("id")
+            if not trace_id:
+                continue
+            del_url = f"{endpoint}/api/public/traces/{trace_id}"
+            del_resp = http_requests.delete(del_url, auth=auth, timeout=10)
+            if del_resp.status_code in (200, 204):
+                deleted_count += 1
+
+        return {"traces_deleted": deleted_count, "traces_found": len(traces)}
+
+    except Exception as e:
+        return {"skipped": True, "reason": str(e)}
 
 
 # --- Backward-compatible simple chat endpoint ---

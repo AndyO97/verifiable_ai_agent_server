@@ -103,6 +103,32 @@ body {
   color: #60a5fa;
 }
 
+/* --- Conv item top row (title + delete) --- */
+
+.conv-top-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.conv-delete-btn {
+  background: none;
+  border: none;
+  color: #666;
+  font-size: 0.85rem;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+.conv-delete-btn:hover {
+  color: #f87171;
+  background: rgba(248, 113, 113, 0.15);
+}
+
 .sidebar-empty {
   padding: 24px 16px;
   text-align: center;
