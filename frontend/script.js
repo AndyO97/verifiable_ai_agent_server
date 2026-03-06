@@ -118,7 +118,9 @@ sidebarToggle.addEventListener('click', () => {
 async function loadConversationList() {
   try {
     const res = await secureFetch('/api/conversations');
-    const conversations = await res.json();
+    const data = await res.json();
+    // Guard against non-array responses (e.g. error objects from backend)
+    const conversations = Array.isArray(data) ? data : [];
     renderConversationList(conversations);
   } catch (e) {
     console.error('Failed to load conversations:', e);
@@ -255,7 +257,7 @@ async function switchToConversation(conv) {
   items.forEach(el => {
     const titleEl = el.querySelector('.conv-title');
     const displayId = conv.session_id || conv.conversation_id;
-    const expected = displayId.length > 28 ? displayId.slice(0, 28) + '…' : displayId;
+    const expected = displayId.length > 24 ? displayId.slice(0, 24) + '…' : displayId;
     if (titleEl && titleEl.textContent === expected) {
       el.classList.add('active');
     }
@@ -407,8 +409,13 @@ async function handleNewChat() {
   // Finalize current conversation if one exists
   if (currentConversationId) {
     try {
-      await secureFetch(`/api/conversations/${currentConversationId}/finalize`, { method: 'POST' });
-      console.log('Previous conversation finalized:', currentConversationId);
+      const res = await secureFetch(`/api/conversations/${currentConversationId}/finalize`, { method: 'POST' });
+      const data = await res.json();
+      if (data.error) {
+        console.warn('Finalize response:', data.error);
+      } else {
+        console.log('Previous conversation finalized:', currentConversationId);
+      }
     } catch (e) {
       console.error('Failed to finalize conversation:', e);
     }

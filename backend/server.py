@@ -181,9 +181,15 @@ async def finalize_conversation(conversation_id: str):
         messages = db.get_messages(conversation_id)
         conv = conv_manager.resume_conversation(conversation_id, db_record, messages)
 
-    result = conv.finalize()
+    try:
+        result = conv.finalize()
+    except Exception as e:
+        return {"error": f"Finalize failed: {str(e)}"}
+
     if "error" not in result:
         db.save_integrity(conversation_id, result)
+    # Always persist conversation state (including is_finalized flag)
+    db.save_conversation(conv.get_summary())
     return result
 
 

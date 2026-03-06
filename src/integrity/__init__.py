@@ -350,7 +350,6 @@ class IntegrityMiddleware:
                 self.langfuse_client.update_trace(
                     output=f"Verified. Root: {root_b64[:32]}...",
                     metadata={"verkle_root": root_b64, "event_count": len(self.accumulator.events)},
-                    tags=["verified", "finalized"]
                 )
             except Exception as e:
                 logger.warning("langfuse_finalize_failed", error=str(e))
