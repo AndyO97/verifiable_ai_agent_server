@@ -8,7 +8,8 @@ import os
 import sys
 import asyncio
 import requests
-from typing import Any
+import re
+from typing import Any, List
 from datetime import datetime
 from pathlib import Path
 try:
@@ -23,6 +24,248 @@ from src.agent import MCPServer, AIAgent, ToolDefinition
 from src.integrity import HierarchicalVerkleMiddleware
 from src.security import SecurityMiddleware
 from src.config import get_settings
+
+# --- Safe Math Expression Evaluator ---
+
+class SafeMathEvaluator:
+    """
+    Secure mathematical expression parser and evaluator.
+    No external dependencies. Pure Python implementation.
+    
+    Allowed operations:
+    - Arithmetic: +, -, *, /, //, **, %
+    - Parentheses for grouping
+    - Functions: abs(), round(), min(), max(), sum()
+    - Numbers: integers and floats (e.g., 3.14, -5, 0.5)
+    
+    NOT allowed:
+    - Variables or assignments
+    - Function definitions
+    - Imports, attribute access, or method calls
+    - Loops, conditionals, or any control flow
+    - Any Python code beyond safe math expressions
+    
+    Examples:
+    - "2 + 3 * 4" => 14.0
+    - "(5 - 2) ** 2" => 9.0
+    - "abs(-10)" => 10.0
+    - "min(3, 1, 5)" => 1.0
+    - "sum(1, 2, 3)" => 6.0
+    """
+    
+    def __init__(self):
+        pass
+    
+    def evaluate(self, expression: str) -> float:
+        """Parse and safely evaluate the expression. Returns float result."""
+        # Reject expressions with disallowed characters
+        allowed_chars = set('0123456789+-*/%() .,abs()round()min()max()sum()')
+        if not all(c in allowed_chars for c in expression):
+            raise ValueError("Expression contains disallowed characters")
+        
+        # Tokenize
+        tokens = self._tokenize(expression.strip())
+        
+        if not tokens:
+            raise ValueError("Empty expression")
+        
+        # Parse and evaluate
+        result, pos = self._parse_expression(tokens, 0)
+        
+        # Ensure all tokens were consumed
+        if pos < len(tokens):
+            raise ValueError(f"Unexpected token at position {pos}: {tokens[pos]}")
+        
+        return float(result)
+    
+    def _tokenize(self, expr: str) -> List[str]:
+        """Tokenize expression into a list of tokens"""
+        tokens = []
+        i = 0
+        
+        while i < len(expr):
+            # Skip whitespace
+            if expr[i].isspace():
+                i += 1
+                continue
+            
+            # Numbers (int or float)
+            if expr[i].isdigit() or (expr[i] == '.' and i + 1 < len(expr) and expr[i + 1].isdigit()):
+                j = i
+                has_dot = False
+                while j < len(expr) and (expr[j].isdigit() or (expr[j] == '.' and not has_dot)):
+                    if expr[j] == '.':
+                        has_dot = True
+                    j += 1
+                tokens.append(expr[i:j])
+                i = j
+            # Function names
+            elif expr[i:i+5] == 'round' and (i + 5 >= len(expr) or not expr[i + 5].isalnum()):
+                tokens.append('round')
+                i += 5
+            elif expr[i:i+3] == 'abs' and (i + 3 >= len(expr) or not expr[i + 3].isalnum()):
+                tokens.append('abs')
+                i += 3
+            elif expr[i:i+3] == 'min' and (i + 3 >= len(expr) or not expr[i + 3].isalnum()):
+                tokens.append('min')
+                i += 3
+            elif expr[i:i+3] == 'max' and (i + 3 >= len(expr) or not expr[i + 3].isalnum()):
+                tokens.append('max')
+                i += 3
+            elif expr[i:i+3] == 'sum' and (i + 3 >= len(expr) or not expr[i + 3].isalnum()):
+                tokens.append('sum')
+                i += 3
+            # Operators and parentheses
+            elif expr[i:i+2] == '//':
+                tokens.append('//')
+                i += 2
+            elif expr[i:i+2] == '**':
+                tokens.append('**')
+                i += 2
+            elif expr[i] in '+-*/%(),':
+                tokens.append(expr[i])
+                i += 1
+            else:
+                raise ValueError(f"Unexpected character: '{expr[i]}'")
+        
+        return tokens
+    
+    def _parse_expression(self, tokens: List[str], pos: int) -> tuple:
+        """Parse addition/subtraction (lowest precedence)"""
+        left, pos = self._parse_term(tokens, pos)
+        
+        while pos < len(tokens) and tokens[pos] in ('+', '-'):
+            op = tokens[pos]
+            pos += 1
+            right, pos = self._parse_term(tokens, pos)
+            left = left + right if op == '+' else left - right
+        
+        return left, pos
+    
+    def _parse_term(self, tokens: List[str], pos: int) -> tuple:
+        """Parse multiplication/division/modulo (medium precedence)"""
+        left, pos = self._parse_power(tokens, pos)
+        
+        while pos < len(tokens) and tokens[pos] in ('*', '/', '//', '%'):
+            op = tokens[pos]
+            pos += 1
+            right, pos = self._parse_power(tokens, pos)
+            
+            if op == '*':
+                left = left * right
+            elif op == '/':
+                if right == 0:
+                    raise ValueError("Division by zero")
+                left = left / right
+            elif op == '//':
+                if right == 0:
+                    raise ValueError("Division by zero")
+                left = int(left // right)
+            else:  # %
+                if right == 0:
+                    raise ValueError("Modulo by zero")
+                left = left % right
+        
+        return left, pos
+    
+    def _parse_power(self, tokens: List[str], pos: int) -> tuple:
+        """Parse exponentiation (right-associative)"""
+        left, pos = self._parse_unary(tokens, pos)
+        
+        if pos < len(tokens) and tokens[pos] == '**':
+            pos += 1
+            right, pos = self._parse_power(tokens, pos)
+            left = left ** right
+        
+        return left, pos
+    
+    def _parse_unary(self, tokens: List[str], pos: int) -> tuple:
+        """Parse unary +/- and function calls"""
+        # Unary operators
+        if pos < len(tokens) and tokens[pos] in ('+', '-'):
+            op = tokens[pos]
+            pos += 1
+            val, pos = self._parse_unary(tokens, pos)
+            return (-val if op == '-' else val), pos
+        
+        # Function calls
+        if pos < len(tokens) and tokens[pos] in ('abs', 'round', 'min', 'max', 'sum'):
+            func_name = tokens[pos]
+            pos += 1
+            
+            if pos >= len(tokens) or tokens[pos] != '(':
+                raise ValueError(f"Expected '(' after {func_name}")
+            pos += 1
+            
+            # Parse arguments
+            args = []
+            if pos < len(tokens) and tokens[pos] != ')':
+                while True:
+                    val, pos = self._parse_expression(tokens, pos)
+                    args.append(val)
+                    
+                    if pos >= len(tokens):
+                        raise ValueError(f"Unexpected end of expression in {func_name}() call")
+                    
+                    if tokens[pos] == ')':
+                        break
+                    elif tokens[pos] == ',':
+                        pos += 1
+                    else:
+                        raise ValueError(f"Expected ',' or ')' in {func_name}() call, got '{tokens[pos]}'")
+            
+            if pos >= len(tokens) or tokens[pos] != ')':
+                raise ValueError(f"Expected ')' after {func_name}() arguments")
+            pos += 1
+            
+            # Apply function
+            if func_name == 'abs':
+                if len(args) != 1:
+                    raise ValueError(f"abs() takes exactly 1 argument, got {len(args)}")
+                return abs(args[0]), pos
+            elif func_name == 'round':
+                if len(args) < 1 or len(args) > 2:
+                    raise ValueError(f"round() takes 1 or 2 arguments, got {len(args)}")
+                ndigits = int(args[1]) if len(args) == 2 else 0
+                return round(args[0], ndigits), pos
+            elif func_name == 'min':
+                if len(args) < 1:
+                    raise ValueError("min() requires at least 1 argument")
+                return min(args), pos
+            elif func_name == 'max':
+                if len(args) < 1:
+                    raise ValueError("max() requires at least 1 argument")
+                return max(args), pos
+            elif func_name == 'sum':
+                if len(args) < 1:
+                    raise ValueError("sum() requires at least 1 argument")
+                return sum(args), pos
+        
+        return self._parse_primary(tokens, pos)
+    
+    def _parse_primary(self, tokens: List[str], pos: int) -> tuple:
+        """Parse primary values: numbers and parenthesized expressions"""
+        if pos >= len(tokens):
+            raise ValueError("Unexpected end of expression")
+        
+        token = tokens[pos]
+        
+        # Number literal
+        try:
+            return float(token), pos + 1
+        except ValueError:
+            pass
+        
+        # Parenthesized expression
+        if token == '(':
+            pos += 1
+            val, pos = self._parse_expression(tokens, pos)
+            if pos >= len(tokens) or tokens[pos] != ')':
+                raise ValueError("Expected ')'")
+            return val, pos + 1
+        
+        raise ValueError(f"Expected number or '(', got '{token}'")
+
 
 # --- Tool Definitions ---
 
@@ -86,8 +329,11 @@ async def math_tool(expression: str = None, **kwargs) -> str:
     if not expression:
         return "Error: No expression provided."
     try:
-        result = eval(expression, {"__builtins__": {}})
+        evaluator = SafeMathEvaluator()
+        result = evaluator.evaluate(expression)
         return f"{expression} = {result}"
+    except ValueError as e:
+        return f"Error: Invalid expression: {str(e)}"
     except Exception as e:
         return f"Error: {str(e)}"
 
@@ -118,6 +364,17 @@ async def datetime_tool(format: str = "%Y-%m-%d %H:%M:%S") -> str:
         return f"Current datetime: {now}"
     except Exception as e:
         return f"Error: {str(e)}"
+
+def clean_latex_notation(text: str) -> str:
+    """Remove LaTeX math delimiters while preserving the actual content."""
+    # Remove inline math: $...$
+    text = re.sub(r'\$([^$]*)\$', r'\1', text)
+    # Remove \boxed{...}
+    text = re.sub(r'\\boxed\{([^}]*)\}', r'\1', text)
+    # Remove other common LaTeX commands
+    text = re.sub(r'\\text\{([^}]*)\}', r'\1', text)
+    text = re.sub(r'\\frac\{([^}]*)\}\{([^}]*)\}', r'\1/\2', text)
+    return text
 
 # --- MCP Server Setup ---
 mcp_server = MCPServer(session_id="backend-mcp-agent-" + datetime.now().strftime("%Y%m%d-%H%M%S"))
@@ -207,6 +464,6 @@ async def answer_prompt(prompt: str) -> str:
     )
     try:
         result = await agent.run_async(prompt=prompt, max_turns=6)
-        return result['output']
+        return clean_latex_notation(result['output'])
     except Exception as e:
         return f"Error running agent: {e}"
