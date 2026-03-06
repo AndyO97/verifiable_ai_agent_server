@@ -78,9 +78,22 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
     - Callers don't need to interact with Langfuse directly
     """
     
-    def __init__(self, session_id: Optional[str] = None):
-        """Initialize hierarchical middleware with Langfuse observability"""
+    def __init__(self, session_id: Optional[str] = None, langfuse_session_id: Optional[str] = None):
+        """Initialize hierarchical middleware with Langfuse observability.
+        
+        Args:
+            session_id: Unique session identifier for Verkle integrity (one per prompt/run).
+            langfuse_session_id: Optional Langfuse session identifier for grouping traces.
+                If provided, all Langfuse traces from this middleware will be grouped
+                under this session (OTel Resource attribute 'service.instance.id').
+                If not provided, defaults to session_id (each middleware = its own session).
+                Use this to group multiple prompts under one conversation session.
+        """
         super().__init__(session_id)
+        
+        # Langfuse session ID — may differ from self.session_id when multiple
+        # middleware instances share a single Langfuse session (e.g., chat conversations).
+        self._langfuse_session_id = langfuse_session_id or self.session_id
         
         # Span management
         self.spans: Dict[str, SpanMetadata] = {}
@@ -131,11 +144,17 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
                 self.trace_id = None
                 return
             
-            # Create Langfuse client with session_id (groups all traces together)
-            self.langfuse_client = LangfuseClient(self.session_id)
+            # Create Langfuse client with the langfuse_session_id (groups traces together).
+            # In chat mode this is the conversation session_id, so all prompts share one session.
+            # In demo mode this falls back to self.session_id (one session per run).
+            self.langfuse_client = LangfuseClient(self._langfuse_session_id)
             self.trace_id = None  # Will be created when first interaction starts
             
-            logger.info("langfuse_client_initialized", session_id=self.session_id)
+            logger.info(
+                "langfuse_client_initialized",
+                session_id=self.session_id,
+                langfuse_session_id=self._langfuse_session_id,
+            )
         except Exception as e:
             logger.debug("langfuse_initialization_failed", error=str(e))
             self.langfuse_client = None
@@ -765,6 +784,9 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
                 )
                 
                 # Update trace with final output and FLUSH to Langfuse
+                # Note: verification status is conveyed via the score above
+                # (verification_status: 1.0) and metadata (verified: True).
+                # Tags are reserved for categorization/filtering, not transient state.
                 self.langfuse_client.update_trace(
                     output=f"Session verified. Root: {session_root[:32]}...",
                     metadata={
@@ -773,7 +795,6 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
                         "event_count": self.counter,
                         "canonical_log_hash": log_hash,
                     },
-                    tags=["verified", "finalized"],
                     flush=True  # Send all accumulated trace data now
                 )
             except Exception as e:

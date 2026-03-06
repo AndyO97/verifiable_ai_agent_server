@@ -103,7 +103,13 @@ class Conversation:
         })
 
         # Create fresh middleware for this prompt
-        middleware = HierarchicalVerkleMiddleware(session_id=prompt_session_id)
+        # Use prompt-specific session_id for Verkle integrity, but share the
+        # conversation-level session_id in Langfuse so all prompts appear
+        # under one session (OTel-compliant: session groups multiple traces).
+        middleware = HierarchicalVerkleMiddleware(
+            session_id=prompt_session_id,
+            langfuse_session_id=self.session_id,
+        )
 
         try:
             llm_client = AIAgent.create_llm_client()
@@ -236,8 +242,6 @@ class Conversation:
         if self.is_finalized:
             return {"error": "Conversation already finalized."}
 
-        self.is_finalized = True
-
         # Finalize conversation-level accumulator
         self.conversation_accumulator.finalize()
         conversation_root = self.conversation_accumulator.get_root_b64()
@@ -296,7 +300,7 @@ class Conversation:
             total_events=len(self.all_canonical_events),
         )
 
-        return {
+        result = {
             "conversation_id": self.conversation_id,
             "session_id": self.session_id,
             "conversation_root": conversation_root,
@@ -308,6 +312,11 @@ class Conversation:
             "created_at": self.created_at,
             "finalized_at": datetime.now().isoformat(),
         }
+
+        # Mark as finalized only after all operations succeed
+        self.is_finalized = True
+
+        return result
 
     def get_summary(self) -> dict:
         """Return conversation metadata."""
