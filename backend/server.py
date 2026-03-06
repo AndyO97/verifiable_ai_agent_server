@@ -50,16 +50,19 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+# Load settings for middleware configuration
+settings = get_settings()
+
 # --- HTTP Transport Security ---
 http_security = HTTPSecurityManager()
 app.add_middleware(HTTPSecurityMiddleware, security_manager=http_security)
 
-# CORS: restrict to same origin only (no cross-origin API access)
+# CORS: restrict to configured origins (default: same origin only)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://127.0.0.1:8000", "http://localhost:8000"],
-    allow_methods=["GET", "POST", "DELETE"],
-    allow_headers=["Content-Type", "X-Session-Token", "X-Timestamp", "X-Nonce", "X-Signature"],
+    allow_origins=settings.cors.get_origins_list(),
+    allow_methods=settings.cors.get_methods_list(),
+    allow_headers=settings.cors.get_headers_list(),
 )
 
 # Initialize database (SQLite by default, PostgreSQL if DATABASE_URL is set)

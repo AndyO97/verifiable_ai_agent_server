@@ -76,6 +76,30 @@ class OTelSettings(BaseSettings):
     service_version: str = "0.1.0"
 
 
+class CORSSettings(BaseSettings):
+    """CORS middleware configuration"""
+    model_config = ConfigDict(env_prefix="CORS_", env_file=".env", case_sensitive=False, extra="ignore")
+    
+    # Comma-separated origins (e.g. "http://localhost:3000,http://127.0.0.1:3000")
+    allowed_origins: str = "http://127.0.0.1:8000,http://localhost:8000"
+    # Comma-separated methods (e.g. "GET,POST,DELETE")
+    allowed_methods: str = "GET,POST,DELETE"
+    # Comma-separated headers (e.g. "Content-Type,Authorization")
+    allowed_headers: str = "Content-Type,X-Session-Token,X-Timestamp,X-Nonce,X-Signature"
+    
+    def get_origins_list(self) -> list[str]:
+        """Parse comma-separated origins into a list"""
+        return [origin.strip() for origin in self.allowed_origins.split(",") if origin.strip()]
+    
+    def get_methods_list(self) -> list[str]:
+        """Parse comma-separated methods into a list"""
+        return [method.strip() for method in self.allowed_methods.split(",") if method.strip()]
+    
+    def get_headers_list(self) -> list[str]:
+        """Parse comma-separated headers into a list"""
+        return [header.strip() for header in self.allowed_headers.split(",") if header.strip()]
+
+
 class SecuritySettings(BaseSettings):
     """Security and Cryptography settings"""
     model_config = ConfigDict(env_prefix="SECURITY_", env_file=".env", case_sensitive=False, extra="ignore")
@@ -124,6 +148,9 @@ class Settings(BaseSettings):
     # Observability
     langfuse: LangfuseSettings = LangfuseSettings()
     otel: OTelSettings = OTelSettings()
+    
+    # Middleware (CORS, headers, etc.)
+    cors: CORSSettings = CORSSettings()
     
     # OpenWeather
     openweather: OpenWeatherSettings = OpenWeatherSettings()
