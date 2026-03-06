@@ -38,6 +38,32 @@ from http_security import HTTPSecurityManager, HTTPSecurityMiddleware
 # Config
 from src.config import get_settings
 
+# --- Input Validation Constants ---
+import re
+
+MAX_PROMPT_LENGTH = 10000  # Maximum prompt length in characters
+MAX_CONVERSATION_ID_LENGTH = 256  # Maximum conversation ID length
+CONVERSATION_ID_PATTERN = re.compile(r'^[a-zA-Z0-9-]+$')  # Alphanumeric + hyphens only
+
+def validate_conversation_id(conversation_id: str) -> tuple[bool, str]:
+    """
+    Validate conversation_id format.
+    Must be alphanumeric + hyphens only, and under MAX_CONVERSATION_ID_LENGTH.
+    
+    Returns:
+        (is_valid, error_message)
+    """
+    if not conversation_id or len(conversation_id) == 0:
+        return False, "Conversation ID cannot be empty."
+    
+    if len(conversation_id) > MAX_CONVERSATION_ID_LENGTH:
+        return False, f"Conversation ID exceeds maximum length of {MAX_CONVERSATION_ID_LENGTH} characters."
+    
+    if not CONVERSATION_ID_PATTERN.match(conversation_id):
+        return False, "Conversation ID must contain only alphanumeric characters and hyphens."
+    
+    return True, ""
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -120,6 +146,11 @@ async def list_conversations():
 @app.post("/api/conversations/{conversation_id}/chat")
 async def chat_in_conversation(conversation_id: str, request: Request):
     """Send a prompt within an existing conversation."""
+    # Validate conversation_id format
+    is_valid, error_msg = validate_conversation_id(conversation_id)
+    if not is_valid:
+        return {"error": error_msg}
+    
     conv = conv_manager.get_conversation(conversation_id)
 
     # If not in memory, try to resume from database
@@ -133,9 +164,13 @@ async def chat_in_conversation(conversation_id: str, request: Request):
         conv = conv_manager.resume_conversation(conversation_id, db_record, messages)
 
     data = await request.json()
-    prompt = data.get("prompt", "")
+    prompt = data.get("prompt", "").strip()
     if not prompt:
         return {"error": "No prompt provided."}
+    
+    # Validate prompt length
+    if len(prompt) > MAX_PROMPT_LENGTH:
+        return {"error": f"Prompt exceeds maximum length of {MAX_PROMPT_LENGTH} characters. Current length: {len(prompt)}."}
 
     # Send prompt and get response (includes per-prompt Verkle root)
     result = await conv.send_prompt(prompt)
@@ -172,6 +207,11 @@ async def chat_in_conversation(conversation_id: str, request: Request):
 @app.post("/api/conversations/{conversation_id}/finalize")
 async def finalize_conversation(conversation_id: str):
     """Finalize a conversation: compute conversation-level Verkle root and save workflow."""
+    # Validate conversation_id format
+    is_valid, error_msg = validate_conversation_id(conversation_id)
+    if not is_valid:
+        return {"error": error_msg}
+    
     conv = conv_manager.get_conversation(conversation_id)
 
     # Resume from DB if not in memory
@@ -199,6 +239,11 @@ async def finalize_conversation(conversation_id: str):
 @app.get("/api/conversations/{conversation_id}/messages")
 async def get_conversation_messages(conversation_id: str):
     """Get all messages for a conversation."""
+    # Validate conversation_id format
+    is_valid, error_msg = validate_conversation_id(conversation_id)
+    if not is_valid:
+        return {"error": error_msg}
+    
     return db.get_messages(conversation_id)
 
 
@@ -210,6 +255,11 @@ async def delete_conversation(conversation_id: str):
     2. Delete from database (conversations, messages, prompt_roots tables)
     3. Delete Langfuse traces for this session (best-effort)
     """
+    # Validate conversation_id format
+    is_valid, error_msg = validate_conversation_id(conversation_id)
+    if not is_valid:
+        return {"error": error_msg}
+    
     # Check it exists
     db_record = db.get_conversation(conversation_id)
     if not db_record:
@@ -286,9 +336,13 @@ async def chat_endpoint(request: Request):
     Creates a conversation per prompt, finalizes immediately.
     """
     data = await request.json()
-    prompt = data.get("prompt", "")
+    prompt = data.get("prompt", "").strip()
     if not prompt:
         return {"response": "Error: No prompt provided."}
+    
+    # Validate prompt length
+    if len(prompt) > MAX_PROMPT_LENGTH:
+        return {"response": f"Error: Prompt exceeds maximum length of {MAX_PROMPT_LENGTH} characters. Current length: {len(prompt)}."}
 
     # Create a temporary conversation for this single prompt
     conv = conv_manager.create_conversation()

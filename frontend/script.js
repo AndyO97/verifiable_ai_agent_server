@@ -76,22 +76,42 @@ async function signRequest(timestamp, nonce, method, path, body) {
 /**
  * Wrapper for fetch() that automatically adds security headers.
  * All /api/ calls should go through this.
+ * Automatically re-initializes the session on 401 and retries once.
  */
 async function secureFetch(url, options = {}) {
   if (!sessionToken || !cryptoKey) {
-    // Session not initialized yet, try to init
     await initSession();
     if (!sessionToken) {
       throw new Error('No secure session available');
     }
   }
 
+  const res = await _signedFetch(url, options);
+
+  // If session expired (e.g. server restarted), re-init and retry once
+  if (res.status === 401) {
+    console.warn('Session expired, re-initializing...');
+    sessionToken = null;
+    cryptoKey = null;
+    await initSession();
+    if (!sessionToken) {
+      throw new Error('Failed to re-initialize session');
+    }
+    return await _signedFetch(url, options);
+  }
+
+  return res;
+}
+
+/**
+ * Internal: perform a single fetch with HMAC signing.
+ */
+async function _signedFetch(url, options = {}) {
   const method = (options.method || 'GET').toUpperCase();
   const body = options.body || '';
   const timestamp = Date.now().toString();
   const nonce = generateNonce();
 
-  // Extract path from URL (handles both absolute and relative)
   const path = new URL(url, window.location.origin).pathname;
 
   const signature = await signRequest(timestamp, nonce, method, path, body);
@@ -130,7 +150,7 @@ async function loadConversationList() {
 function renderConversationList(conversations) {
   conversationList.innerHTML = '';
 
-  if (!conversations || conversations.length === 0) {
+  if (!Array.isArray(conversations) || conversations.length === 0) {
     conversationList.innerHTML = '<div class="sidebar-empty">No conversations yet</div>';
     return;
   }
