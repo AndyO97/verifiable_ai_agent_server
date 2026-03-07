@@ -96,6 +96,35 @@ python backend/server.py
 
 Open **http://localhost:8000** in your browser. The chat interface loads automatically.
 
+### HTTPS Setup (Optional)
+
+By default, the HMAC session key is transmitted over HTTP. For secure local development with encrypted key exchange:
+
+```powershell
+# 1. Generate self-signed certificates (one-time)
+python backend/generate_certs.py
+
+# 2. Start server with HTTPS
+python backend/server.py --https
+
+# OR use environment variable
+$env:USE_HTTPS='true'
+python backend/server.py
+
+# 3. Visit https://localhost:8000 (accept certificate warning)
+```
+
+**Certificate Details:**
+- Algorithm: RSA 2048-bit, SHA-256
+- Validity: 365 days from generation
+- Subject Alt Names: localhost, *.localhost, 127.0.0.1  
+- Storage: `certs/localhost.crt` and `certs/localhost.key` (not committed to git)
+
+**Notes:**
+- Browser will show security warning (expected for self-signed certs)
+- HTTP remains the default (remove `--https` flag to use unencrypted transport)
+- For production: replace with CA-signed certificates (e.g., Let's Encrypt)
+
 ### Chat Interface Features
 
 | Feature | Description |

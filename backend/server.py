@@ -11,10 +11,13 @@ Setup and run (Windows, PowerShell):
        & "./venv/Scripts/Activate.ps1"
 2. Install dependencies:
        pip install fastapi uvicorn
-3. Run the server:
+3. Run the server (HTTP - default):
        & "./venv/Scripts/python.exe" backend/server.py
+   OR with HTTPS (self-signed certificates):
+       python backend/generate_certs.py  # One-time cert generation
+       & "./venv/Scripts/python.exe" backend/server.py --https
 
-Visit http://localhost:8000 in your browser.
+Visit http://localhost:8000 (HTTP) or https://localhost:8000 (HTTPS) in your browser.
 """
 
 from contextlib import asynccontextmanager
@@ -65,6 +68,30 @@ def validate_conversation_id(conversation_id: str) -> tuple[bool, str]:
     return True, ""
 
 
+def get_session_token(request: Request) -> str:
+    """Extract the validated session token from request state (set by HTTPSecurityMiddleware)."""
+    return getattr(request.state, "session_token", "")
+
+
+def verify_conversation_access(conversation_id: str, session_token: str, db_record: dict) -> tuple[bool, str]:
+    """
+    Verify the current session owns this conversation.
+    Access is allowed if:
+    - No owner set (legacy conversation)
+    - Owner matches current session
+    - Owner session expired (reclaim ownership)
+    """
+    owner = db_record.get("owner_token")
+    if not owner or owner == session_token:
+        return True, ""
+    # Owner exists but doesn't match — check if owner's session is still active
+    if http_security.get_session(owner) is not None:
+        return False, "Access denied: this conversation belongs to another session."
+    # Owner session expired — reclaim
+    db.update_conversation_owner(conversation_id, session_token)
+    return True, ""
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup: nothing extra needed (db and conv_manager init above)
@@ -90,6 +117,45 @@ app.add_middleware(
     allow_methods=settings.cors.get_methods_list(),
     allow_headers=settings.cors.get_headers_list(),
 )
+
+# --- Security Headers Middleware (Native ASGI) ---
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    """
+    Native Starlette ASGI middleware that adds security response headers.
+    More performant than BaseHTTPMiddleware with zero overhead.
+    
+    Headers added:
+    - Content-Security-Policy: Prevents XSS by restricting script sources
+    - X-Content-Type-Options: Prevents MIME type sniffing
+    - X-Frame-Options: Prevents clickjacking
+    - Referrer-Policy: Prevents referrer leakage
+    - Permissions-Policy: Disables unnecessary browser features
+    - Strict-Transport-Security: Enforces HTTPS (for production with TLS)
+    """
+    response = await call_next(request)
+    
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data: https:; "
+        "font-src 'self'; "
+        "connect-src 'self'; "
+        "base-uri 'self'; "
+        "form-action 'self';"
+    )
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = (
+        "geolocation=(), microphone=(), camera=(), usb=(), "
+        "magnetometer=(), gyroscope=(), accelerometer=()"
+    )
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains; preload"
+    
+    return response
 
 # Initialize database (SQLite by default, PostgreSQL if DATABASE_URL is set)
 db = create_database()
@@ -129,18 +195,33 @@ async def init_session(request: Request):
 # --- Conversation API ---
 
 @app.post("/api/conversations")
-async def create_conversation():
-    """Create a new conversation session."""
+async def create_conversation(request: Request):
+    """Create a new conversation session, bound to the requesting HTTP session."""
+    session_token = get_session_token(request)
     conv = conv_manager.create_conversation()
     data = conv.get_summary()
+    data["owner_token"] = session_token
     db.save_conversation(data)
     return data
 
 
 @app.get("/api/conversations")
-async def list_conversations():
-    """List all conversations."""
-    return db.list_conversations()
+async def list_conversations(request: Request):
+    """List conversations owned by the current session."""
+    session_token = get_session_token(request)
+    all_convs = db.list_conversations()
+    visible = []
+    for conv in all_convs:
+        owner = conv.get("owner_token")
+        if not owner or owner == session_token:
+            visible.append(conv)
+        elif http_security.get_session(owner) is None:
+            # Owner session expired — reclaim for current session
+            db.update_conversation_owner(conv["conversation_id"], session_token)
+            conv["owner_token"] = session_token
+            visible.append(conv)
+        # else: owned by active session of another user — hide
+    return visible
 
 
 @app.post("/api/conversations/{conversation_id}/chat")
@@ -151,15 +232,22 @@ async def chat_in_conversation(conversation_id: str, request: Request):
     if not is_valid:
         return {"error": error_msg}
     
+    session_token = get_session_token(request)
+
+    # Verify conversation exists and check ownership
+    db_record = db.get_conversation(conversation_id)
+    if not db_record:
+        return {"error": f"Conversation {conversation_id} not found. Create one first."}
+    has_access, access_err = verify_conversation_access(conversation_id, session_token, db_record)
+    if not has_access:
+        return {"error": access_err}
+    if db_record.get("is_finalized"):
+        return {"error": f"Conversation {conversation_id} is finalized (read-only)."}
+
     conv = conv_manager.get_conversation(conversation_id)
 
-    # If not in memory, try to resume from database
+    # If not in memory, resume from database
     if not conv:
-        db_record = db.get_conversation(conversation_id)
-        if not db_record:
-            return {"error": f"Conversation {conversation_id} not found. Create one first."}
-        if db_record.get("is_finalized"):
-            return {"error": f"Conversation {conversation_id} is finalized (read-only)."}
         messages = db.get_messages(conversation_id)
         conv = conv_manager.resume_conversation(conversation_id, db_record, messages)
 
@@ -205,22 +293,29 @@ async def chat_in_conversation(conversation_id: str, request: Request):
 
 
 @app.post("/api/conversations/{conversation_id}/finalize")
-async def finalize_conversation(conversation_id: str):
+async def finalize_conversation(conversation_id: str, request: Request):
     """Finalize a conversation: compute conversation-level Verkle root and save workflow."""
     # Validate conversation_id format
     is_valid, error_msg = validate_conversation_id(conversation_id)
     if not is_valid:
         return {"error": error_msg}
     
+    session_token = get_session_token(request)
+
+    # Verify conversation exists and check ownership
+    db_record = db.get_conversation(conversation_id)
+    if not db_record:
+        return {"error": f"Conversation {conversation_id} not found."}
+    has_access, access_err = verify_conversation_access(conversation_id, session_token, db_record)
+    if not has_access:
+        return {"error": access_err}
+    if db_record.get("is_finalized"):
+        return {"error": f"Conversation {conversation_id} is already finalized."}
+
     conv = conv_manager.get_conversation(conversation_id)
 
     # Resume from DB if not in memory
     if not conv:
-        db_record = db.get_conversation(conversation_id)
-        if not db_record:
-            return {"error": f"Conversation {conversation_id} not found."}
-        if db_record.get("is_finalized"):
-            return {"error": f"Conversation {conversation_id} is already finalized."}
         messages = db.get_messages(conversation_id)
         conv = conv_manager.resume_conversation(conversation_id, db_record, messages)
 
@@ -237,18 +332,26 @@ async def finalize_conversation(conversation_id: str):
 
 
 @app.get("/api/conversations/{conversation_id}/messages")
-async def get_conversation_messages(conversation_id: str):
+async def get_conversation_messages(conversation_id: str, request: Request):
     """Get all messages for a conversation."""
     # Validate conversation_id format
     is_valid, error_msg = validate_conversation_id(conversation_id)
     if not is_valid:
         return {"error": error_msg}
     
+    # Verify ownership
+    session_token = get_session_token(request)
+    db_record = db.get_conversation(conversation_id)
+    if db_record:
+        has_access, access_err = verify_conversation_access(conversation_id, session_token, db_record)
+        if not has_access:
+            return {"error": access_err}
+    
     return db.get_messages(conversation_id)
 
 
 @app.delete("/api/conversations/{conversation_id}")
-async def delete_conversation(conversation_id: str):
+async def delete_conversation(conversation_id: str, request: Request):
     """
     Delete a conversation entirely:
     1. Remove from in-memory ConversationManager + delete workflow folder
@@ -260,10 +363,15 @@ async def delete_conversation(conversation_id: str):
     if not is_valid:
         return {"error": error_msg}
     
-    # Check it exists
+    # Check it exists and verify ownership
     db_record = db.get_conversation(conversation_id)
     if not db_record:
         return {"error": f"Conversation {conversation_id} not found."}
+    
+    session_token = get_session_token(request)
+    has_access, access_err = verify_conversation_access(conversation_id, session_token, db_record)
+    if not has_access:
+        return {"error": access_err}
 
     # 1. Memory + workflow directory cleanup
     conv_result = conv_manager.delete_conversation(conversation_id)
@@ -371,4 +479,48 @@ async def chat_endpoint(request: Request):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("server:app", host="127.0.0.1", port=8000, reload=True)
+    import argparse
+    from pathlib import Path
+    
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(description="Run the AI Agent Chat Backend Server")
+    parser.add_argument("--https", action="store_true", help="Enable HTTPS with self-signed certificates")
+    parser.add_argument("--port", type=int, default=8000, help="Port to run the server on (default: 8000)")
+    parser.add_argument("--host", default="127.0.0.1", help="Host to bind to (default: 127.0.0.1)")
+    args = parser.parse_args()
+    
+    # Check for environment variable override
+    use_https = args.https or os.getenv("USE_HTTPS", "false").lower() in ("true", "1", "yes")
+    
+    # Prepare HTTPS config if requested
+    ssl_keyfile = None
+    ssl_certfile = None
+    if use_https:
+        project_root = Path(__file__).parent.parent
+        certs_dir = project_root / "certs"
+        cert_file = certs_dir / "localhost.crt"
+        key_file = certs_dir / "localhost.key"
+        
+        if cert_file.exists() and key_file.exists():
+            ssl_certfile = str(cert_file)
+            ssl_keyfile = str(key_file)
+            print(f"[HTTPS] Loading SSL certificates from {certs_dir}/")
+        else:
+            print(f"[ERROR] HTTPS requested but certificates not found at {certs_dir}/")
+            print(f"  Generate certificates with: python backend/generate_certs.py")
+            sys.exit(1)
+    
+    # Determine protocol
+    protocol = "https" if use_https else "http"
+    print(f"\n[Server] Starting on {protocol}://{args.host}:{args.port}")
+    if use_https:
+        print(f"[Server] ⚠️  Self-signed certificate in use. Browser will show security warning (expected).")
+    
+    uvicorn.run(
+        "server:app",
+        host=args.host,
+        port=args.port,
+        reload=True,
+        ssl_keyfile=ssl_keyfile,
+        ssl_certfile=ssl_certfile,
+    )
