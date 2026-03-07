@@ -161,14 +161,24 @@ class Conversation:
             self.prompt_roots.append(prompt_info)
 
             # Accumulate canonical events
+            prompt_canonical_events = []
             if hasattr(middleware, "canonical_events"):
-                self.all_canonical_events.extend(middleware.canonical_events)
+                prompt_canonical_events = middleware.canonical_events
+                self.all_canonical_events.extend(prompt_canonical_events)
+
+            # Compute per-prompt canonical log hash
+            prompt_log_text = json.dumps(
+                prompt_canonical_events, separators=(",", ":"), sort_keys=True
+            )
+            prompt_canonical_log_hash = hashlib.sha256(prompt_log_text.encode("utf-8")).hexdigest()
+            prompt_info["canonical_log_hash"] = prompt_canonical_log_hash
 
             # Save canonical log incrementally
             self._save_incremental_log(middleware, prompt_index)
 
         except Exception as e:
             response_text = f"Error running agent: {e}"
+            prompt_canonical_log_hash = None
             self.prompt_roots.append({
                 "prompt_index": prompt_index,
                 "prompt_session_id": prompt_session_id,
@@ -189,6 +199,7 @@ class Conversation:
             "output": response_text,
             "prompt_root": self.prompt_roots[-1].get("prompt_root"),
             "prompt_index": prompt_index,
+            "canonical_log_hash": prompt_canonical_log_hash,
         }
 
     def _save_incremental_log(self, middleware: HierarchicalVerkleMiddleware, prompt_index: int):

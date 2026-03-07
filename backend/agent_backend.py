@@ -337,26 +337,70 @@ async def math_tool(expression: str = None, **kwargs) -> str:
     except Exception as e:
         return f"Error: {str(e)}"
 
-async def wikipedia_tool(query: str) -> str:
-    url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{query.replace(' ', '%20')}"
-    try:
-        headers = {"User-Agent": "Mozilla/5.0 (compatible; MCPAgent/1.0; +https://example.com/)"}
-        resp = requests.get(url, timeout=5, headers=headers)
-        if resp.status_code != 200:
-            try:
-                data = resp.json()
-                return f"Error: {data.get('detail', data.get('message', 'API error'))} (HTTP {resp.status_code})"
-            except Exception:
-                return f"Error: Wikipedia API returned HTTP {resp.status_code} with no JSON body."
-        if not resp.content or not resp.text.strip():
-            return "Error: Wikipedia API returned empty response."
+async def wikipedia_tool(query: str = None, **kwargs) -> str:
+    """
+    Search Wikipedia for a summary.
+    Accepts both 'query' and 'search' parameters for flexibility.
+    
+    Note: Wikipedia's API requires exact page titles. Multi-word queries
+    work best with proper capitalization (e.g., "List of cities by population").
+    """
+    # Handle both 'search' and 'query' parameter names
+    if query is None:
+        query = kwargs.get('search') or kwargs.get('query')
+    
+    if not query:
+        return "Error: No query provided. Use 'query' or 'search' parameter."
+    
+    # Try multiple variations to handle different title formats
+    query_variations = [
+        query,                                    # Original
+        query.title(),                            # Title case
+        query.upper(),                            # All caps
+        query.replace(' ', '_'),                  # Underscores instead of spaces
+        query.replace(' ', '_').title(),          # Title case with underscores
+    ]
+    
+    url_template = "https://en.wikipedia.org/api/rest_v1/page/summary/{}"
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; MCPAgent/1.0; +https://example.com/)"}
+    
+    last_error = None
+    
+    for variation in query_variations:
         try:
-            data = resp.json()
+            # URL encode: replace spaces with %20
+            encoded = variation.replace(' ', '%20')
+            url = url_template.format(encoded)
+            
+            resp = requests.get(url, timeout=5, headers=headers)
+            
+            if resp.status_code == 200:
+                try:
+                    data = resp.json()
+                    extract = data.get('extract', '')
+                    if extract:
+                        return extract
+                except Exception:
+                    pass
+            elif resp.status_code != 404:
+                # 404 is expected for non-existent pages, try next variation
+                try:
+                    data = resp.json()
+                    last_error = f"Error: {data.get('detail', data.get('message', 'API error'))} (HTTP {resp.status_code})"
+                except Exception:
+                    last_error = f"Error: Wikipedia API returned HTTP {resp.status_code}"
         except Exception as e:
-            return f"Error: Wikipedia API response was not valid JSON: {str(e)}"
-        return data.get('extract', 'No summary found.')
-    except Exception as e:
-        return f"Error: Wikipedia request failed: {str(e)}"
+            last_error = f"Request error: {str(e)}"
+    
+    # If no variation worked, provide helpful guidance
+    if last_error:
+        return f"{last_error}\n\nTip: For multi-word searches, try 'List of...' pages (e.g., 'List of cities by population')"
+    else:
+        return (
+            f"Error: No Wikipedia page found for '{query}'.\n\n"
+            "Tip: Wikipedia API requires exact page titles. For searches like 'largest city in the world', "
+            "try 'List of cities by population' or 'List of metropolitan areas'"
+        )
 
 async def datetime_tool(format: str = "%Y-%m-%d %H:%M:%S") -> str:
     try:
