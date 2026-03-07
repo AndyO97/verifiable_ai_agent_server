@@ -36,6 +36,7 @@ dependencies = [
     "alembic>=1.13.0",
     # Time handling
     "python-dateutil>=2.8.2",
+    "ntplib>=0.4.0",
     # Storage (S3/Azure Blob)
     "boto3>=1.34.0",
     "azure-storage-blob>=12.19.0",

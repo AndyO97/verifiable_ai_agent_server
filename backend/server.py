@@ -289,6 +289,7 @@ async def chat_in_conversation(conversation_id: str, request: Request):
         "conversation_id": conversation_id,
         "prompt_root": result.get("prompt_root"),
         "prompt_index": result.get("prompt_index"),
+        "canonical_log_hash": result.get("canonical_log_hash"),
     }
 
 
