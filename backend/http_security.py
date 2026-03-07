@@ -243,6 +243,9 @@ class HTTPSecurityMiddleware(BaseHTTPMiddleware):
                 content={"error": "Invalid or expired session. Call /api/session/init first."},
             )
 
+        # Store validated session token for route-level access control
+        request.state.session_token = token
+
         # 3. Timestamp freshness
         timestamp_str = request.headers.get("X-Timestamp", "")
         try:

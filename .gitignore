@@ -76,6 +76,7 @@ proof.json
 *.pyc
 .mypy_cache/
 .ruff_cache/
+certs/
 
 # OS files
 Thumbs.db
@@ -85,3 +86,4 @@ Thumbs.db
 # Project specific
 venv.ps1
 .python-version.bak
+Issues Found (Ranked by Severity).txt

@@ -59,6 +59,9 @@ class DatabaseBackend:
     def delete_conversation(self, conversation_id: str) -> bool:
         raise NotImplementedError
 
+    def update_conversation_owner(self, conversation_id: str, owner_token: str):
+        raise NotImplementedError
+
     def close(self):
         raise NotImplementedError
 
@@ -115,14 +118,32 @@ class SQLiteBackend(DatabaseBackend):
             )
         """)
         self.conn.commit()
+
+        # Migration: add owner_token column for session-conversation binding
+        try:
+            self.conn.execute("ALTER TABLE conversations ADD COLUMN owner_token TEXT")
+            self.conn.commit()
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
         logger.info("sqlite_initialized", db_path=self.db_path)
 
     def save_conversation(self, data: dict):
         self.conn.execute("""
-            INSERT OR REPLACE INTO conversations 
+            INSERT INTO conversations 
             (conversation_id, session_id, created_at, finalized_at, is_finalized,
-             conversation_root, canonical_log_hash, workflow_dir, message_count, prompt_count)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             conversation_root, canonical_log_hash, workflow_dir, message_count, prompt_count, owner_token)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(conversation_id) DO UPDATE SET
+                session_id = excluded.session_id,
+                created_at = excluded.created_at,
+                finalized_at = excluded.finalized_at,
+                is_finalized = excluded.is_finalized,
+                conversation_root = excluded.conversation_root,
+                canonical_log_hash = excluded.canonical_log_hash,
+                workflow_dir = excluded.workflow_dir,
+                message_count = excluded.message_count,
+                prompt_count = excluded.prompt_count
         """, (
             data.get("conversation_id"),
             data.get("session_id"),
@@ -134,6 +155,7 @@ class SQLiteBackend(DatabaseBackend):
             data.get("workflow_dir"),
             data.get("message_count", 0),
             data.get("prompt_count", 0),
+            data.get("owner_token"),
         ))
         self.conn.commit()
 
@@ -211,6 +233,13 @@ class SQLiteBackend(DatabaseBackend):
             logger.error("sqlite_delete_failed", conversation_id=conversation_id, error=str(e))
             return False
 
+    def update_conversation_owner(self, conversation_id: str, owner_token: str):
+        self.conn.execute(
+            "UPDATE conversations SET owner_token = ? WHERE conversation_id = ?",
+            (owner_token, conversation_id)
+        )
+        self.conn.commit()
+
     def close(self):
         if self.conn:
             self.conn.close()
@@ -268,6 +297,15 @@ class PostgreSQLBackend(DatabaseBackend):
                 )
             """)
         self.conn.commit()
+
+        # Migration: add owner_token column for session-conversation binding
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute("ALTER TABLE conversations ADD COLUMN IF NOT EXISTS owner_token TEXT")
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+
         logger.info("postgresql_initialized", url=self.database_url.split("@")[-1] if "@" in self.database_url else "***")
 
     def save_conversation(self, data: dict):
@@ -275,8 +313,8 @@ class PostgreSQLBackend(DatabaseBackend):
             cur.execute("""
                 INSERT INTO conversations 
                 (conversation_id, session_id, created_at, finalized_at, is_finalized,
-                 conversation_root, canonical_log_hash, workflow_dir, message_count, prompt_count)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 conversation_root, canonical_log_hash, workflow_dir, message_count, prompt_count, owner_token)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (conversation_id) DO UPDATE SET
                     session_id = EXCLUDED.session_id,
                     finalized_at = EXCLUDED.finalized_at,
@@ -297,6 +335,7 @@ class PostgreSQLBackend(DatabaseBackend):
                 data.get("workflow_dir"),
                 data.get("message_count", 0),
                 data.get("prompt_count", 0),
+                data.get("owner_token"),
             ))
         self.conn.commit()
 
@@ -377,6 +416,14 @@ class PostgreSQLBackend(DatabaseBackend):
         except Exception as e:
             logger.error("postgres_delete_failed", conversation_id=conversation_id, error=str(e))
             return False
+
+    def update_conversation_owner(self, conversation_id: str, owner_token: str):
+        with self.conn.cursor() as cur:
+            cur.execute(
+                "UPDATE conversations SET owner_token = %s WHERE conversation_id = %s",
+                (owner_token, conversation_id)
+            )
+        self.conn.commit()
 
     def close(self):
         if self.conn:
