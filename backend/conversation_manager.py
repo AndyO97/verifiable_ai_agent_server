@@ -28,6 +28,7 @@ from src.agent import MCPServer, AIAgent
 from src.integrity import HierarchicalVerkleMiddleware
 from src.security import SecurityMiddleware
 from src.crypto.verkle import VerkleAccumulator
+from src.observability.trace_context import TraceContext
 
 import structlog
 
@@ -77,13 +78,17 @@ class Conversation:
             session_id=self.session_id,
         )
 
-    async def send_prompt(self, prompt: str) -> dict:
+    async def send_prompt(self, prompt: str, trace_context: TraceContext = None) -> dict:
         """
         Send a prompt within this conversation.
 
         Each prompt creates a fresh middleware -> agent -> run_async cycle.
         The prompt's session root is added to the conversation accumulator.
         Canonical logs are saved incrementally.
+
+        Args:
+            prompt: The user prompt text.
+            trace_context: Optional W3C Trace Context for distributed trace correlation.
 
         Returns:
             dict with 'output', 'prompt_root', 'prompt_index'
@@ -109,6 +114,7 @@ class Conversation:
         middleware = HierarchicalVerkleMiddleware(
             session_id=prompt_session_id,
             langfuse_session_id=self.session_id,
+            trace_context=trace_context,
         )
 
         try:

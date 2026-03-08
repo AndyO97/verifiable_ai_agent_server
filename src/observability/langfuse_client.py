@@ -29,6 +29,12 @@ import structlog
 
 from src.config import get_settings
 
+# Avoid circular import — TraceContext is optional
+try:
+    from src.observability.trace_context import TraceContext
+except ImportError:
+    TraceContext = None
+
 logger = structlog.get_logger(__name__)
 
 
@@ -52,12 +58,15 @@ class LangfuseClient:
     (e.g., multi-turn agents) may create multiple traces within one session.
     """
     
-    def __init__(self, session_id: str):
+    def __init__(self, session_id: str, trace_context=None):
         """
         Initialize Langfuse client for a session.
         
         Args:
             session_id: Unique session identifier (groups traces together)
+            trace_context: Optional W3C TraceContext for distributed correlation.
+                If provided, traceparent/tracestate headers are included in
+                outgoing Langfuse API requests.
         """
         self.session_id = session_id
         self.settings = get_settings()
@@ -68,6 +77,7 @@ class LangfuseClient:
         self._has_pending_updates: bool = False  # Track if there are updates since last flush
         self._pending_traces: list[tuple[str, dict]] = []  # (trace_id, trace_data) for multi-trace support
         self._auth: Optional[HTTPBasicAuth] = None
+        self._trace_context = trace_context  # W3C Trace Context for outgoing header propagation
         
         # Initialize auth if credentials available
         if self.settings.langfuse.public_key and self.settings.langfuse.secret_key:
@@ -518,12 +528,17 @@ class LangfuseClient:
         try:
             ingestion_url = f"{self.api_endpoint}/api/public/ingestion"
             
+            headers = {"Content-Type": "application/json"}
+            # Propagate W3C Trace Context to Langfuse for distributed correlation
+            if self._trace_context and hasattr(self._trace_context, 'inject_headers'):
+                self._trace_context.inject_headers(headers)
+
             response = requests.post(
                 ingestion_url,
                 json={"batch": items},
                 auth=self._auth,
                 timeout=10,
-                headers={"Content-Type": "application/json"}
+                headers=headers,
             )
             
             if response.status_code in (200, 201, 207):
