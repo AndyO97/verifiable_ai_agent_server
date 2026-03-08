@@ -23,7 +23,11 @@ let cryptoKey = null;  // CryptoKey object for HMAC-SHA256
 async function initSession() {
   try {
     const res = await fetch('/api/session/init', { method: 'POST' });
-    const data = await res.json();
+    let data = await res.json();
+    // Handle MCP-wrapped response (has .result field)
+    if (data.result) {
+      data = data.result;
+    }
     sessionToken = data.session_token;
     hmacKeyHex = data.hmac_key;
 
@@ -74,9 +78,11 @@ async function signRequest(timestamp, nonce, method, path, body) {
 }
 
 /**
- * Wrapper for fetch() that automatically adds security headers.
+ * Wrapper for fetch() that automatically adds security headers and unwraps MCP responses.
  * All /api/ calls should go through this.
  * Automatically re-initializes the session on 401 and retries once.
+ * 
+ * Returns a response object with a json() method that unwraps MCP responses.
  */
 async function secureFetch(url, options = {}) {
   if (!sessionToken || !cryptoKey) {
@@ -86,7 +92,7 @@ async function secureFetch(url, options = {}) {
     }
   }
 
-  const res = await _signedFetch(url, options);
+  let res = await _signedFetch(url, options);
 
   // If session expired (e.g. server restarted), re-init and retry once
   if (res.status === 401) {
@@ -97,8 +103,19 @@ async function secureFetch(url, options = {}) {
     if (!sessionToken) {
       throw new Error('Failed to re-initialize session');
     }
-    return await _signedFetch(url, options);
+    res = await _signedFetch(url, options);
   }
+
+  // Wrap response.json() to automatically unwrap MCP-wrapped responses
+  const originalJson = res.json.bind(res);
+  res.json = async function() {
+    const data = await originalJson();
+    // If response has .result field (MCP-wrapped), extract it
+    if (data && typeof data === 'object' && 'result' in data) {
+      return data.result;
+    }
+    return data;
+  };
 
   return res;
 }
@@ -138,10 +155,10 @@ sidebarToggle.addEventListener('click', () => {
 async function loadConversationList() {
   try {
     const res = await secureFetch('/api/conversations');
-    const data = await res.json();
+    const conversations = await res.json();
     // Guard against non-array responses (e.g. error objects from backend)
-    const conversations = Array.isArray(data) ? data : [];
-    renderConversationList(conversations);
+    const conversationList = Array.isArray(conversations) ? conversations : [];
+    renderConversationList(conversationList);
   } catch (e) {
     console.error('Failed to load conversations:', e);
   }

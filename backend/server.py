@@ -41,12 +41,40 @@ from http_security import HTTPSecurityManager, HTTPSecurityMiddleware
 # Config
 from src.config import get_settings
 
+# W3C Trace Context
+from src.observability.trace_context import TraceContext
+
 # --- Input Validation Constants ---
 import re
 
 MAX_PROMPT_LENGTH = 10000  # Maximum prompt length in characters
 MAX_CONVERSATION_ID_LENGTH = 256  # Maximum conversation ID length
 CONVERSATION_ID_PATTERN = re.compile(r'^[a-zA-Z0-9-]+$')  # Alphanumeric + hyphens only
+
+# --- MCP Response Wrapper (Issue #10) ---
+# Wraps responses with _meta field for MCP 2024-11 compliance
+
+def mcp_response(result: dict, progress_token: str = None, pagination: dict = None) -> dict:
+    """
+    Wrap result in MCP 2024-11 compliant response structure.
+    
+    Args:
+        result: The actual response data
+        progress_token: Optional progress token for tracking long operations
+        pagination: Optional pagination metadata (limit, offset, total)
+    
+    Returns:
+        dict with 'result' and '_meta' keys
+    """
+    meta = {}
+    if progress_token:
+        meta["progressToken"] = progress_token
+    if pagination:
+        meta["pagination"] = pagination
+    return {
+        "result": result,
+        "_meta": meta
+    }
 
 def validate_conversation_id(conversation_id: str) -> tuple[bool, str]:
     """
@@ -157,6 +185,42 @@ async def add_security_headers(request: Request, call_next):
     
     return response
 
+
+# --- W3C Trace Context Middleware ---
+
+@app.middleware("http")
+async def trace_context_middleware(request: Request, call_next):
+    """
+    W3C Trace Context propagation (https://www.w3.org/TR/trace-context/).
+
+    Extracts incoming traceparent/tracestate headers from the request.
+    If absent, generates a new root trace context for the request.
+    Stores the context on request.state for downstream use and
+    injects traceparent/tracestate into the response.
+    """
+    # Extract or generate trace context
+    incoming_traceparent = request.headers.get("traceparent")
+    incoming_tracestate = request.headers.get("tracestate")
+
+    trace_ctx = TraceContext.from_headers(incoming_traceparent, incoming_tracestate)
+    if trace_ctx is None:
+        # No valid incoming context — generate a new root
+        trace_ctx = TraceContext.generate()
+
+    # Create a child span context for this server's processing
+    server_ctx = trace_ctx.create_child()
+    request.state.trace_context = server_ctx
+
+    response = await call_next(request)
+
+    # Inject trace context into response headers
+    response.headers["traceparent"] = server_ctx.traceparent
+    ts = server_ctx.tracestate_header
+    if ts:
+        response.headers["tracestate"] = ts
+
+    return response
+
 # Initialize database (SQLite by default, PostgreSQL if DATABASE_URL is set)
 db = create_database()
 
@@ -189,7 +253,8 @@ async def init_session(request: Request):
     No prior authentication required (first contact).
     """
     client_ip = request.client.host if request.client else "unknown"
-    return http_security.create_session(client_ip)
+    session_data = http_security.create_session(client_ip)
+    return mcp_response(session_data)
 
 
 # --- Conversation API ---
@@ -202,7 +267,10 @@ async def create_conversation(request: Request):
     data = conv.get_summary()
     data["owner_token"] = session_token
     db.save_conversation(data)
-    return data
+    return mcp_response(
+        data,
+        progress_token=f"conv-{data.get('conversation_id')}-init"
+    )
 
 
 @app.get("/api/conversations")
@@ -221,7 +289,14 @@ async def list_conversations(request: Request):
             conv["owner_token"] = session_token
             visible.append(conv)
         # else: owned by active session of another user — hide
-    return visible
+    return mcp_response(
+        visible,
+        pagination={
+            "limit": len(visible),
+            "offset": 0,
+            "total": len(visible)
+        }
+    )
 
 
 @app.post("/api/conversations/{conversation_id}/chat")
@@ -260,8 +335,11 @@ async def chat_in_conversation(conversation_id: str, request: Request):
     if len(prompt) > MAX_PROMPT_LENGTH:
         return {"error": f"Prompt exceeds maximum length of {MAX_PROMPT_LENGTH} characters. Current length: {len(prompt)}."}
 
+    # Extract W3C Trace Context for propagation
+    trace_ctx: TraceContext = getattr(request.state, "trace_context", None)
+
     # Send prompt and get response (includes per-prompt Verkle root)
-    result = await conv.send_prompt(prompt)
+    result = await conv.send_prompt(prompt, trace_context=trace_ctx)
 
     # Save messages to database
     messages = conv.messages
@@ -284,13 +362,17 @@ async def chat_in_conversation(conversation_id: str, request: Request):
     # Update conversation metadata in DB
     db.save_conversation(conv.get_summary())
 
-    return {
+    response_data = {
         "response": result.get("output", ""),
         "conversation_id": conversation_id,
         "prompt_root": result.get("prompt_root"),
         "prompt_index": result.get("prompt_index"),
         "canonical_log_hash": result.get("canonical_log_hash"),
     }
+    return mcp_response(
+        response_data,
+        progress_token=f"chat-{conversation_id}-turn-{result.get('prompt_index', 0)}"
+    )
 
 
 @app.post("/api/conversations/{conversation_id}/finalize")
@@ -329,7 +411,10 @@ async def finalize_conversation(conversation_id: str, request: Request):
         db.save_integrity(conversation_id, result)
     # Always persist conversation state (including is_finalized flag)
     db.save_conversation(conv.get_summary())
-    return result
+    return mcp_response(
+        result,
+        progress_token=f"chat-{conversation_id}-finalize"
+    )
 
 
 @app.get("/api/conversations/{conversation_id}/messages")
@@ -348,7 +433,15 @@ async def get_conversation_messages(conversation_id: str, request: Request):
         if not has_access:
             return {"error": access_err}
     
-    return db.get_messages(conversation_id)
+    messages = db.get_messages(conversation_id)
+    return mcp_response(
+        messages,
+        pagination={
+            "limit": len(messages),
+            "offset": 0,
+            "total": len(messages)
+        }
+    )
 
 
 @app.delete("/api/conversations/{conversation_id}")
@@ -383,13 +476,17 @@ async def delete_conversation(conversation_id: str, request: Request):
     # 3. Langfuse cleanup (best-effort)
     langfuse_deleted = _delete_langfuse_session(f"chat-{conversation_id}")
 
-    return {
+    delete_result = {
         "deleted": True,
         "conversation_id": conversation_id,
         "db_deleted": db_deleted,
         "workflow_dir_deleted": conv_result.get("workflow_dir_deleted", False),
         "langfuse_deleted": langfuse_deleted,
     }
+    return mcp_response(
+        delete_result,
+        progress_token=f"chat-{conversation_id}-delete"
+    )
 
 
 def _delete_langfuse_session(session_id: str) -> dict:

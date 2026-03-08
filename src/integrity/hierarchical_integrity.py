@@ -31,6 +31,7 @@ from src.config import get_settings
 from src.integrity import IntegrityMiddleware, IntegrityEvent
 from src.crypto.verkle import VerkleAccumulator
 from src.observability.langfuse_client import LangfuseClient
+from src.observability.trace_context import TraceContext
 
 logger = structlog.get_logger(__name__)
 
@@ -78,7 +79,7 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
     - Callers don't need to interact with Langfuse directly
     """
     
-    def __init__(self, session_id: Optional[str] = None, langfuse_session_id: Optional[str] = None):
+    def __init__(self, session_id: Optional[str] = None, langfuse_session_id: Optional[str] = None, trace_context: Optional[TraceContext] = None):
         """Initialize hierarchical middleware with Langfuse observability.
         
         Args:
@@ -88,8 +89,14 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
                 under this session (OTel Resource attribute 'service.instance.id').
                 If not provided, defaults to session_id (each middleware = its own session).
                 Use this to group multiple prompts under one conversation session.
+            trace_context: Optional W3C Trace Context for distributed trace correlation.
+                If provided, trace-id and parent-id are included in Langfuse trace
+                metadata and canonical events for external OTel correlation.
         """
         super().__init__(session_id)
+        
+        # W3C Trace Context for distributed correlation
+        self._trace_context = trace_context
         
         # Langfuse session ID — may differ from self.session_id when multiple
         # middleware instances share a single Langfuse session (e.g., chat conversations).
@@ -147,7 +154,10 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
             # Create Langfuse client with the langfuse_session_id (groups traces together).
             # In chat mode this is the conversation session_id, so all prompts share one session.
             # In demo mode this falls back to self.session_id (one session per run).
-            self.langfuse_client = LangfuseClient(self._langfuse_session_id)
+            self.langfuse_client = LangfuseClient(
+                self._langfuse_session_id,
+                trace_context=self._trace_context,
+            )
             self.trace_id = None  # Will be created when first interaction starts
             
             logger.info(
@@ -166,14 +176,19 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
             return None
         
         if not self.trace_id:
+            trace_metadata = {
+                "protocol_version": "MCP-2024-11",
+                "session_id": self.session_id,
+                "middleware_type": "hierarchical_verkle",
+                "cryptography": "KZG-BLS12-381",
+            }
+            # Include W3C Trace Context for distributed correlation
+            if self._trace_context:
+                trace_metadata.update(self._trace_context.to_metadata())
+
             self.trace_id = self.langfuse_client.create_trace(
                 name=trace_name,
-                metadata={
-                    "protocol_version": "MCP-2024-11",
-                    "session_id": self.session_id,
-                    "middleware_type": "hierarchical_verkle",
-                    "cryptography": "KZG-BLS12-381",
-                },
+                metadata=trace_metadata,
                 input_data=input_data,
             )
         
@@ -209,7 +224,7 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
         - Verification reconstruction uses 'attributes' as the payload for Verkle computation
         - timestamp parameter must be passed in (from IntegrityEvent) to ensure consistency
         """
-        return {
+        event = {
             "counter": self.counter,
             "timestamp": timestamp,
             "event_type": event_type,
@@ -220,6 +235,11 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
             "signer_id": signer_id,
             "session_id": self.session_id,
         }
+        # Include W3C Trace Context for distributed OTel correlation
+        if self._trace_context:
+            event["trace_id"] = self._trace_context.trace_id
+            event["traceparent"] = self._trace_context.traceparent
+        return event
     
     def start_span(self, span_name: str) -> str:
         """
