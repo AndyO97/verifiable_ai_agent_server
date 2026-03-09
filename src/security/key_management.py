@@ -3,7 +3,9 @@ Key Management System for Attribute-Based Signing.
 Manages the Master Secret and issues Derived Keys to Tools.
 """
 
+import ast
 from typing import Tuple, Any
+from py_ecc.optimized_bls12_381 import FQ, FQ2
 from src.crypto.signatures import IBSScheme, PointG1, PointG2, Scalar
 
 class ToolSigner:
@@ -29,9 +31,6 @@ class ToolSigner:
     @classmethod
     def import_from_string(cls, tool_name: str, key_str: str) -> 'ToolSigner':
         """Reconstruct a ToolSigner from an exported string"""
-        import ast
-        from py_ecc.optimized_bls12_381 import FQ
-        
         # Parse tuple (x, y, z)
         try:
             vals = ast.literal_eval(key_str)
@@ -79,6 +78,79 @@ class KeyAuthority:
     def sign_root(self, root_hash: bytes) -> PointG1:
         """Sign the final Verkle Root using the Master Key"""
         return IBSScheme.sign_root_bls(self._msk, root_hash)
+
+    def export_mpk(self) -> dict:
+        """
+        Export Master Public Key as a JSON-serializable dict.
+        
+        MPK is a G2 point on BLS12-381 with FQ2 coordinates.
+        Each FQ2 has two integer coefficients.
+        
+        Returns:
+            dict with curve, group, and x/y/z coordinate pairs
+        """
+        mpk = self.mpk
+        return {
+            "curve": "BLS12-381",
+            "group": "G2",
+            "x": [int(mpk[0].coeffs[0]), int(mpk[0].coeffs[1])],
+            "y": [int(mpk[1].coeffs[0]), int(mpk[1].coeffs[1])],
+            "z": [int(mpk[2].coeffs[0]), int(mpk[2].coeffs[1])],
+        }
+
+    @staticmethod
+    def import_mpk(data: dict) -> PointG2:
+        """
+        Reconstruct Master Public Key from exported dict.
+        
+        Args:
+            data: dict with x, y, z keys (each a [coeff0, coeff1] list)
+        
+        Returns:
+            G2 point suitable for IBSScheme.verify()
+        """
+        x = FQ2(data["x"])
+        y = FQ2(data["y"])
+        z = FQ2(data["z"])
+        return (x, y, z)
+
+    @staticmethod
+    def parse_ibs_signature(sig_str: str) -> Tuple[PointG1, PointG1]:
+        """
+        Parse an IBS signature string back into (U, V) G1 point tuple.
+        
+        The signature is stored in canonical events as str((U, V)) where
+        U and V are G1 points in projective coordinates (FQ(x), FQ(y), FQ(z)).
+        
+        Args:
+            sig_str: String representation like "((x1, y1, z1), (x2, y2, z2))"
+        
+        Returns:
+            Tuple of two G1 points (U, V)
+        
+        Raises:
+            ValueError: If the string cannot be parsed as a valid signature
+        """
+        from py_ecc.optimized_bls12_381 import FQ
+        
+        try:
+            parsed = ast.literal_eval(sig_str)
+            if not isinstance(parsed, tuple) or len(parsed) != 2:
+                raise ValueError("Signature must be a tuple of two points")
+            
+            u_raw, v_raw = parsed
+            if not isinstance(u_raw, tuple) or len(u_raw) != 3:
+                raise ValueError("U point must be a tuple of 3 coordinates")
+            if not isinstance(v_raw, tuple) or len(v_raw) != 3:
+                raise ValueError("V point must be a tuple of 3 coordinates")
+            
+            U = (FQ(u_raw[0]), FQ(u_raw[1]), FQ(u_raw[2]))
+            V = (FQ(v_raw[0]), FQ(v_raw[1]), FQ(v_raw[2]))
+            
+            return (U, V)
+        except (SyntaxError, TypeError) as e:
+            raise ValueError(f"Failed to parse IBS signature: {e}")
+
 
 class Verifier:
     """

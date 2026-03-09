@@ -794,11 +794,12 @@ python -m src.tools.verify_cli verify "workflows/workflow_real-prompt-mcp-202602
 Each workflow is stored as a self-contained directory with 5 cryptographically verifiable files:
 
 **Workflow Files (Located in `workflows/workflow_{session_id}/`):**
-- `canonical_log.jsonl` - All raw events (source of truth for verification)
+- `canonical_log.jsonl` - All raw events with signatures (source of truth for verification)
 - `spans_structure.json` - OpenTelemetry span organization and hierarchy
 - `commitments.json` - Verkle tree roots and cryptographic commitments
 - `metadata.json` - Session metadata (timestamps, event counts, log hash)
 - `otel_export.json` - Complete span trace in OpenTelemetry JSON format
+- `crypto_params.json` - Cryptographic parameters: scheme and Master Public Key (MPK) for IBS signature verification
 
 **Recovery Scenarios:**
 
@@ -1062,6 +1063,9 @@ python -m src.tools.verify_cli get-workflow real-prompt-mcp-20260222-141751
 # Verify a workflow by session ID (fastest)
 python -m src.tools.verify_cli verify-by-id real-prompt-mcp-20260222-141751
 
+# Verify with tool signature verification
+python -m src.tools.verify_cli verify-by-id real-prompt-mcp-20260222-141751 --verify-signatures --verbose
+
 # Or verify by file path and root commitment
 python -m src.tools.verify_cli verify ./canonical_log.jsonl "AT32sZab0WmCTkJzukkIIuKyqm/j8188kvhFlpT2pqHFY3VNq/X0SlbBT0Ce9GvN" --verbose
 ```
@@ -1130,6 +1134,7 @@ Files:
   Canonical Log: workflows\workflow_real-prompt-mcp-20260222-141751\canonical_log.jsonl
   Metadata: workflows\workflow_real-prompt-mcp-20260222-141751\metadata.json
   Commitments: workflows\workflow_real-prompt-mcp-20260222-141751\commitments.json
+  Crypto Params: workflows\workflow_real-prompt-mcp-20260222-141751\crypto_params.json (for signature verification)
 
 Verification Commands:
 
@@ -1142,17 +1147,27 @@ Verification Commands:
 
 #### 3. **Verify-By-ID** - Verify a workflow by session ID (fastest)
 ```bash
-python -m src.tools.verify_cli verify-by-id <session-id> [--dir <path>] [--verbose]
+python -m src.tools.verify_cli verify-by-id <session-id> [--dir <path>] [--verbose] [--verify-signatures]
 ```
 
-Reconstructs the Verkle tree and confirms the session root commitment matches the stored root.
+Reconstructs the Verkle tree and confirms the session root commitment matches the stored root. Optionally verifies IBS signatures on tool outputs.
 
-**Example:**
+**Options:**
+- `--verbose, -v` - Show detailed verification steps
+- `--verify-signatures` - Also verify Identity-Based Signatures (IBS) on tool outputs
+- `--show-protocol` - Show protocol event breakdown
+
+**Example (Verkle root only):**
 ```bash
 python -m src.tools.verify_cli verify-by-id real-prompt-mcp-20260222-141751 --verbose
 ```
 
-**Output on success:**
+**Example (Verkle root + tool signatures):**
+```bash
+python -m src.tools.verify_cli verify-by-id real-prompt-mcp-20260222-141751 --verbose --verify-signatures
+```
+
+**Output on success (Verkle only):**
 ```
 [OK] Verification PASSED [OK]
   Root matches: AT32sZab0WmCTkJzukkIIuKyqm/j8188kvhFlpT2pqHFY3VNq/X0SlbBT0Ce9GvN
@@ -1160,12 +1175,24 @@ python -m src.tools.verify_cli verify-by-id real-prompt-mcp-20260222-141751 --ve
   Spans verified: 3
 ```
 
-#### 4. **Verify** - Validate run integrity by file path and root
-```bash
-python -m src.tools.verify_cli verify <log_file> <root_b64> [--expected-hash <hash>] [--verbose]
+**Output on success (with signature verification):**
+```
+[OK] Verification PASSED [OK]
+  Root matches: AT32sZab0WmCTkJzukkIIuKyqm/j8188kvhFlpT2pqHFY3VNq/X0SlbBT0Ce9GvN
+  Events verified: 2
+  Spans verified: 3
+
+Verifying IBS signatures...
+  Signatures verified: 2
+  [OK] All 2 signatures verified
 ```
 
-Reconstructs the Verkle tree and confirms the root commitment matches.
+#### 4. **Verify** - Validate run integrity by file path and root
+```bash
+python -m src.tools.verify_cli verify <log_file> <root_b64> [--expected-hash <hash>] [--verbose] [--verify-signatures]
+```
+
+Reconstructs the Verkle tree and confirms the root commitment matches. Optionally verifies IBS signatures on tool outputs.
 
 **Arguments:**
 - `log_file` - Path to the canonical event log (JSON format)
@@ -1174,10 +1201,17 @@ Reconstructs the Verkle tree and confirms the root commitment matches.
 **Options:**
 - `--expected-hash TEXT` - Optional SHA-256 hash to verify log integrity
 - `--verbose, -v` - Show detailed verification steps
+- `--verify-signatures` - Also verify Identity-Based Signatures (IBS) on tool outputs
+- `--show-protocol` - Show protocol event breakdown
 
-**Example:**
+**Example (Verkle root only):**
 ```bash
 python -m src.tools.verify_cli verify ./canonical_log.jsonl "AT32sZab0WmCTkJzukkIIuKyqm/j8188kvhFlpT2pqHFY3VNq/X0SlbBT0Ce9GvN" --verbose
+```
+
+**Example (Verkle root + tool signatures):**
+```bash
+python -m src.tools.verify_cli verify ./canonical_log.jsonl "AT32sZab0WmCTkJzukkIIuKyqm/j8188kvhFlpT2pqHFY3VNq/X0SlbBT0Ce9GvN" --verify-signatures --verbose
 ```
 
 **Output on success:**
@@ -1294,7 +1328,52 @@ The CLI expects canonical logs in JSON format with the following structure:
 - `event_type` - Type of event
 - `counter` - Sequential event counter (must be sequential starting from 0)
 - `timestamp` - ISO 8601 timestamp
-- `data` - Event-specific data
+- `attributes` - Event-specific data (OTel standard)
+
+**Signature Fields (optional, used when `--verify-signatures`):**
+- `signature` - IBS signature as string representation of (U, V) G1 point tuple
+- `signer_id` - Identity of signer (tool name or "server")
+- `span_id` - The span this event belongs to
+
+### Tool Signature Verification (IBS-Based Authenticity)
+
+Any workflow may include **Identity-Based Signatures (IBS)** on tool outputs, proving that the tool (not the client) created that response. To verify these signatures:
+
+```powershell
+# Verify Verkle root AND tool signatures
+python -m src.tools.verify_cli verify-by-id {session_id} --verify-signatures --verbose
+
+# Or with file path
+python -m src.tools.verify_cli verify ./canonical_log.jsonl "{root_b64}" --verify-signatures --verbose
+```
+
+**How Tool Signatures Work:**
+
+1. **Key Provisioning**: Each tool receives an Identity-Based Signature (IBS) private key derived from its name using BLS12-381 elliptic curve cryptography (Cha-Cheon scheme)
+2. **Signing**: When a tool produces output, it cryptographically signs the output with its IBS private key
+3. **Verification**: The public Master Key (MPK) is exported to `crypto_params.json` in the workflow directory
+4. **Third-Party Verification**: Anyone can use the public MPK to verify that the signature is valid for that tool identity and that exact output
+
+**What This Proves:**
+- ✅ The tool output is authentic (signed by the tool, not forged by the client)
+- ✅ The tool identity is correct (derived from tool name using IBS)
+- ✅ The exact output cannot be changed without invalidating the signature
+- ✅ Non-repudiation: The tool cannot deny creating that response
+
+**Signature Verification Output:**
+```
+Verifying IBS signatures...
+  [OK] Event 5 (tool_output): signature valid (signer: weather)
+  [OK] Event 8 (tool_output): signature valid (signer: calculator)
+  Signatures verified: 2
+  [OK] All 2 signatures verified
+```
+
+**Files Required for Signature Verification:**
+- `canonical_log.jsonl` - Contains signed events with `signature` and `signer_id` fields
+- `crypto_params.json` - Contains the Master Public Key (MPK) for signature verification
+
+Both files are automatically saved to the workflow directory and included in all workflow artifacts.
 
 ### Use Cases
 
