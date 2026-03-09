@@ -27,6 +27,8 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from src.agent import MCPServer, AIAgent
 from src.integrity import HierarchicalVerkleMiddleware
 from src.security import SecurityMiddleware
+from src.security.key_management import KeyAuthority
+from src.config import get_settings
 from src.crypto.verkle import VerkleAccumulator
 from src.observability.trace_context import TraceContext
 
@@ -308,6 +310,19 @@ class Conversation:
         }
         with open(metadata_path, "w") as f:
             json.dump(metadata, f, indent=2)
+
+        # Save cryptographic parameters (MPK for IBS signature verification)
+        settings = get_settings()
+        authority = KeyAuthority(
+            master_secret_hex=settings.security.master_secret_key
+        )
+        crypto_params_path = self.workflow_dir / "crypto_params.json"
+        crypto_params = {
+            "scheme": "IBS-Cha-Cheon-BLS12-381",
+            "mpk": authority.export_mpk(),
+        }
+        with open(crypto_params_path, "w") as f:
+            json.dump(crypto_params, f, indent=2)
 
         logger.info(
             "conversation_finalized",

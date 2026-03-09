@@ -20,6 +20,9 @@ import structlog
 import typer
 
 from src.crypto.verkle import VerkleAccumulator
+from src.crypto.encoding import CanonicalEncoder
+from src.crypto.signatures import IBSScheme
+from src.security.key_management import KeyAuthority
 
 logger = structlog.get_logger(__name__)
 
@@ -118,13 +121,80 @@ def print_event_breakdown(app_events: list, protocol_events: list) -> None:
                 typer.echo(f"{prefix} {event_type}: {count}")
 
 
+def verify_ibs_signatures(
+    events: list,
+    crypto_params_path: Path,
+    verbose: bool = False,
+) -> tuple[int, int, list[str]]:
+    """
+    Verify IBS signatures on canonical log events.
+
+    Args:
+        events: List of canonical log events
+        crypto_params_path: Path to crypto_params.json containing the MPK
+        verbose: Print detailed output
+
+    Returns:
+        (verified_count, failed_count, error_messages)
+    """
+    if not crypto_params_path.exists():
+        return 0, 0, ["crypto_params.json not found — signature verification unavailable"]
+
+    try:
+        crypto_params = json.loads(crypto_params_path.read_text())
+        mpk = KeyAuthority.import_mpk(crypto_params["mpk"])
+    except Exception as e:
+        return 0, 0, [f"Failed to load MPK from crypto_params.json: {e}"]
+
+    verified = 0
+    failed = 0
+    errors: list[str] = []
+
+    for i, event in enumerate(events):
+        sig_str = event.get("signature", "")
+        signer_id = event.get("signer_id", "")
+
+        if not sig_str or not signer_id:
+            continue  # Skip events without signatures
+
+        try:
+            signature = KeyAuthority.parse_ibs_signature(sig_str)
+            payload = event.get("attributes")
+            if payload is None:
+                errors.append(f"Event {i}: no attributes field for signature verification")
+                failed += 1
+                continue
+
+            payload_bytes = CanonicalEncoder.encode_event(payload)
+
+            if IBSScheme.verify(mpk, signer_id, payload_bytes, signature):
+                verified += 1
+                if verbose:
+                    typer.echo(
+                        f"  [OK] Event {i} ({event.get('event_type', '?')}): "
+                        f"signature valid (signer: {signer_id})"
+                    )
+            else:
+                failed += 1
+                errors.append(
+                    f"Event {i} ({event.get('event_type', '?')}): "
+                    f"signature INVALID (signer: {signer_id})"
+                )
+        except Exception as e:
+            failed += 1
+            errors.append(f"Event {i}: signature verification error: {e}")
+
+    return verified, failed, errors
+
+
 @app.command()
 def verify(
     canonical_log_path: str = typer.Argument(..., help="Path to the canonical log file"),
     expected_root_b64: str = typer.Argument(..., help="Expected Verkle root (Base64-encoded)"),
     expected_hash: Optional[str] = typer.Option(None, "--expected-hash", help="Expected SHA-256 hash of canonical log (optional)"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed verification steps"),
-    show_protocol: bool = typer.Option(False, "--show-protocol", help="Show protocol event breakdown")
+    show_protocol: bool = typer.Option(False, "--show-protocol", help="Show protocol event breakdown"),
+    verify_signatures: bool = typer.Option(False, "--verify-signatures", help="Also verify IBS signatures on events")
 ) -> None:
     """
     Verify an agent run by reconstructing the Verkle tree.
@@ -338,6 +408,27 @@ def verify(
         if not all_spans_valid:
             typer.echo(f"\n[ERROR] Verification FAILED: span root mismatch [ERROR]", err=True)
             raise typer.Exit(1)
+        
+        # Verify IBS signatures if requested
+        if verify_signatures:
+            typer.echo("\nVerifying IBS signatures...")
+            log_dir = Path(canonical_log_path).parent
+            crypto_params_path = log_dir / "crypto_params.json"
+            sig_verified, sig_failed, sig_errors = verify_ibs_signatures(
+                events, crypto_params_path, verbose
+            )
+            if sig_errors and sig_verified == 0 and sig_failed == 0:
+                # Could not load MPK
+                typer.echo(f"[WARNING] {sig_errors[0]}")
+            else:
+                typer.echo(f"  Signatures verified: {sig_verified}")
+                if sig_failed > 0:
+                    typer.echo(f"  Signatures FAILED: {sig_failed}", err=True)
+                    for err_msg in sig_errors:
+                        typer.echo(f"    {err_msg}", err=True)
+                    typer.echo(f"\n[ERROR] Signature verification FAILED [ERROR]", err=True)
+                    raise typer.Exit(1)
+                typer.echo(f"[OK] All {sig_verified} signatures verified")
         
         # Reconstruct session root from span roots
         if verbose:
@@ -778,7 +869,8 @@ def verify_by_id(
     session_id: str = typer.Argument(..., help="Session ID to verify"),
     workflows_dir: str = typer.Option("workflows", "--dir", "-d", help="Path to workflows directory"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed verification steps"),
-    show_protocol: bool = typer.Option(False, "--show-protocol", help="Show protocol event breakdown")
+    show_protocol: bool = typer.Option(False, "--show-protocol", help="Show protocol event breakdown"),
+    verify_signatures: bool = typer.Option(False, "--verify-signatures", help="Also verify IBS signatures on events")
 ) -> None:
     """
     Verify a workflow by session ID.
@@ -831,12 +923,12 @@ def verify_by_id(
         if is_conversation:
             _verify_conversation_workflow(
                 session_id, workflow_dir, commitments, root_b64,
-                canonical_log_path, verbose, show_protocol
+                canonical_log_path, verbose, show_protocol, verify_signatures
             )
         else:
             _verify_single_session_workflow(
                 session_id, workflow_dir, commitments, root_b64,
-                canonical_log_path, verbose, show_protocol
+                canonical_log_path, verbose, show_protocol, verify_signatures
             )
         
     except typer.Exit:
@@ -988,6 +1080,7 @@ def _verify_single_session_workflow(
     canonical_log_path: Path,
     verbose: bool,
     show_protocol: bool,
+    verify_sigs: bool = False,
 ) -> None:
     """Verify a single-session (non-conversation) workflow."""
     typer.echo(f"Verifying workflow: {session_id}")
@@ -1037,6 +1130,25 @@ def _verify_single_session_workflow(
         session_id, events, span_commitments, verbose
     )
 
+    # Verify IBS signatures if requested
+    if verify_sigs:
+        typer.echo("\nVerifying IBS signatures...")
+        crypto_params_path = workflow_dir / "crypto_params.json"
+        sig_verified, sig_failed, sig_errors = verify_ibs_signatures(
+            events, crypto_params_path, verbose
+        )
+        if sig_errors and sig_verified == 0 and sig_failed == 0:
+            typer.echo(f"[WARNING] {sig_errors[0]}")
+        else:
+            typer.echo(f"  Signatures verified: {sig_verified}")
+            if sig_failed > 0:
+                typer.echo(f"  Signatures FAILED: {sig_failed}", err=True)
+                for err_msg in sig_errors:
+                    typer.echo(f"    {err_msg}", err=True)
+                typer.echo(f"\n[ERROR] Signature verification FAILED [ERROR]", err=True)
+                raise typer.Exit(1)
+            typer.echo(f"[OK] All {sig_verified} signatures verified")
+
     if computed_root == expected_root:
         if show_protocol:
             typer.echo(f"\n[OK] Verification PASSED [OK] (MCP Compliant)")
@@ -1062,6 +1174,7 @@ def _verify_conversation_workflow(
     canonical_log_path: Path,
     verbose: bool,
     show_protocol: bool,
+    verify_sigs: bool = False,
 ) -> None:
     """
     Verify a conversation workflow with multiple prompts.
@@ -1182,6 +1295,25 @@ def _verify_conversation_workflow(
     except Exception as e:
         typer.echo(f"[ERROR] Error finalizing conversation Verkle tree: {e}", err=True)
         raise typer.Exit(1)
+
+    # Verify IBS signatures if requested
+    if verify_sigs:
+        typer.echo("\nVerifying IBS signatures...")
+        crypto_params_path = workflow_dir / "crypto_params.json"
+        sig_verified, sig_failed, sig_errors = verify_ibs_signatures(
+            all_events, crypto_params_path, verbose
+        )
+        if sig_errors and sig_verified == 0 and sig_failed == 0:
+            typer.echo(f"[WARNING] {sig_errors[0]}")
+        else:
+            typer.echo(f"  Signatures verified: {sig_verified}")
+            if sig_failed > 0:
+                typer.echo(f"  Signatures FAILED: {sig_failed}", err=True)
+                for err_msg in sig_errors:
+                    typer.echo(f"    {err_msg}", err=True)
+                typer.echo(f"\n[ERROR] Signature verification FAILED [ERROR]", err=True)
+                raise typer.Exit(1)
+            typer.echo(f"[OK] All {sig_verified} signatures verified")
 
     # Compare conversation roots
     if computed_conversation_root == expected_conversation_root:

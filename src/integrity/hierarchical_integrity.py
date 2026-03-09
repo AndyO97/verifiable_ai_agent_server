@@ -927,6 +927,14 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
         otel_path = base_dir / "otel_export.json"
         otel_path.write_text(json.dumps(otel_export, indent=2))
         
+        # Save cryptographic parameters (MPK for IBS signature verification)
+        crypto_params_path = base_dir / "crypto_params.json"
+        crypto_params = {
+            "scheme": "IBS-Cha-Cheon-BLS12-381",
+            "mpk": self.authority.export_mpk(),
+        }
+        crypto_params_path.write_text(json.dumps(crypto_params, indent=2))
+        
         result = {
             "base_dir": str(base_dir),
             "canonical_log": str(log_path),
@@ -934,6 +942,7 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
             "commitments": str(commitments_path),
             "metadata": str(metadata_path),
             "otel_export": str(otel_path),
+            "crypto_params": str(crypto_params_path),
         }
         
         logger.info("local_storage_saved", **result)
