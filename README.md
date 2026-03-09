@@ -184,6 +184,26 @@ Browser                                   FastAPI Server
 | `DELETE` | `/api/conversations/{id}` | Delete conversation (DB + workflow + Langfuse) |
 | `POST` | `/api/chat` | Simple one-shot chat (backward compatible) |
 
+**Error Response Format (JSON-RPC 2.0 Compliant):**
+
+All error responses follow the JSON-RPC 2.0 specification with structured error codes:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "error": {
+    "code": -32602,
+    "message": "Invalid params: prompt field is required",
+    "data": {/* optional context */}
+  }
+}
+```
+
+Standard error codes:
+- `-32602`: Invalid params (validation errors, missing fields, format errors)
+- `-32603`: Internal error (server-side failures, LLM errors, database errors)
+- `-32001` to `-32010`: Custom server errors (conversation not found, access denied, finalized conversation, etc.)
+
 ### Architecture
 
 ```

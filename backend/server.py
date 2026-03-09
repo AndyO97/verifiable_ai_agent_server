@@ -44,6 +44,9 @@ from src.config import get_settings
 # W3C Trace Context
 from src.observability.trace_context import TraceContext
 
+# JSON-RPC 2.0 Error Responses (MCP Compliance)
+from src.transport.jsonrpc_errors import JSONRPCError
+
 # --- Input Validation Constants ---
 import re
 
@@ -305,19 +308,19 @@ async def chat_in_conversation(conversation_id: str, request: Request):
     # Validate conversation_id format
     is_valid, error_msg = validate_conversation_id(conversation_id)
     if not is_valid:
-        return {"error": error_msg}
+        return JSONRPCError.invalid_conversation_id(conversation_id, error_msg)
     
     session_token = get_session_token(request)
 
     # Verify conversation exists and check ownership
     db_record = db.get_conversation(conversation_id)
     if not db_record:
-        return {"error": f"Conversation {conversation_id} not found. Create one first."}
+        return JSONRPCError.conversation_not_found(conversation_id)
     has_access, access_err = verify_conversation_access(conversation_id, session_token, db_record)
     if not has_access:
-        return {"error": access_err}
+        return JSONRPCError.access_denied(access_err)
     if db_record.get("is_finalized"):
-        return {"error": f"Conversation {conversation_id} is finalized (read-only)."}
+        return JSONRPCError.conversation_finalized(conversation_id)
 
     conv = conv_manager.get_conversation(conversation_id)
 
@@ -329,11 +332,11 @@ async def chat_in_conversation(conversation_id: str, request: Request):
     data = await request.json()
     prompt = data.get("prompt", "").strip()
     if not prompt:
-        return {"error": "No prompt provided."}
+        return JSONRPCError.invalid_params("prompt field is required and cannot be empty")
     
     # Validate prompt length
     if len(prompt) > MAX_PROMPT_LENGTH:
-        return {"error": f"Prompt exceeds maximum length of {MAX_PROMPT_LENGTH} characters. Current length: {len(prompt)}."}
+        return JSONRPCError.prompt_too_long(MAX_PROMPT_LENGTH, len(prompt))
 
     # Extract W3C Trace Context for propagation
     trace_ctx: TraceContext = getattr(request.state, "trace_context", None)
@@ -381,19 +384,19 @@ async def finalize_conversation(conversation_id: str, request: Request):
     # Validate conversation_id format
     is_valid, error_msg = validate_conversation_id(conversation_id)
     if not is_valid:
-        return {"error": error_msg}
+        return JSONRPCError.invalid_conversation_id(conversation_id, error_msg)
     
     session_token = get_session_token(request)
 
     # Verify conversation exists and check ownership
     db_record = db.get_conversation(conversation_id)
     if not db_record:
-        return {"error": f"Conversation {conversation_id} not found."}
+        return JSONRPCError.conversation_not_found(conversation_id)
     has_access, access_err = verify_conversation_access(conversation_id, session_token, db_record)
     if not has_access:
-        return {"error": access_err}
+        return JSONRPCError.access_denied(access_err)
     if db_record.get("is_finalized"):
-        return {"error": f"Conversation {conversation_id} is already finalized."}
+        return JSONRPCError.conversation_finalized(conversation_id)
 
     conv = conv_manager.get_conversation(conversation_id)
 
@@ -405,7 +408,7 @@ async def finalize_conversation(conversation_id: str, request: Request):
     try:
         result = conv.finalize()
     except Exception as e:
-        return {"error": f"Finalize failed: {str(e)}"}
+        return JSONRPCError.internal_error(f"Finalize failed: {str(e)}")
 
     if "error" not in result:
         db.save_integrity(conversation_id, result)
@@ -423,7 +426,7 @@ async def get_conversation_messages(conversation_id: str, request: Request):
     # Validate conversation_id format
     is_valid, error_msg = validate_conversation_id(conversation_id)
     if not is_valid:
-        return {"error": error_msg}
+        return JSONRPCError.invalid_conversation_id(conversation_id, error_msg)
     
     # Verify ownership
     session_token = get_session_token(request)
@@ -431,7 +434,7 @@ async def get_conversation_messages(conversation_id: str, request: Request):
     if db_record:
         has_access, access_err = verify_conversation_access(conversation_id, session_token, db_record)
         if not has_access:
-            return {"error": access_err}
+            return JSONRPCError.access_denied(access_err)
     
     messages = db.get_messages(conversation_id)
     return mcp_response(
@@ -455,17 +458,17 @@ async def delete_conversation(conversation_id: str, request: Request):
     # Validate conversation_id format
     is_valid, error_msg = validate_conversation_id(conversation_id)
     if not is_valid:
-        return {"error": error_msg}
+        return JSONRPCError.invalid_conversation_id(conversation_id, error_msg)
     
     # Check it exists and verify ownership
     db_record = db.get_conversation(conversation_id)
     if not db_record:
-        return {"error": f"Conversation {conversation_id} not found."}
+        return JSONRPCError.conversation_not_found(conversation_id)
     
     session_token = get_session_token(request)
     has_access, access_err = verify_conversation_access(conversation_id, session_token, db_record)
     if not has_access:
-        return {"error": access_err}
+        return JSONRPCError.access_denied(access_err)
 
     # 1. Memory + workflow directory cleanup
     conv_result = conv_manager.delete_conversation(conversation_id)
@@ -544,11 +547,11 @@ async def chat_endpoint(request: Request):
     data = await request.json()
     prompt = data.get("prompt", "").strip()
     if not prompt:
-        return {"response": "Error: No prompt provided."}
+        return JSONRPCError.invalid_params("prompt field is required and cannot be empty")
     
     # Validate prompt length
     if len(prompt) > MAX_PROMPT_LENGTH:
-        return {"response": f"Error: Prompt exceeds maximum length of {MAX_PROMPT_LENGTH} characters. Current length: {len(prompt)}."}
+        return JSONRPCError.prompt_too_long(MAX_PROMPT_LENGTH, len(prompt))
 
     # Create a temporary conversation for this single prompt
     conv = conv_manager.create_conversation()

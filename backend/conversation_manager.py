@@ -31,6 +31,7 @@ from src.security.key_management import KeyAuthority
 from src.config import get_settings
 from src.crypto.verkle import VerkleAccumulator
 from src.observability.trace_context import TraceContext
+from src.transport.jsonrpc_errors import JSONRPCError
 
 import structlog
 
@@ -96,7 +97,7 @@ class Conversation:
             dict with 'output', 'prompt_root', 'prompt_index'
         """
         if self.is_finalized:
-            return {"output": "Error: This conversation has been finalized.", "error": True}
+            return JSONRPCError.conversation_finalized(self.conversation_id)
 
         prompt_index = len(self.prompt_roots)
         prompt_session_id = f"{self.session_id}_prompt{prompt_index}"
@@ -129,7 +130,7 @@ class Conversation:
                 "timestamp": datetime.now().isoformat(),
                 "prompt_index": prompt_index,
             })
-            return {"output": error_msg, "error": True}
+            return JSONRPCError.internal_error(f"LLM client initialization failed: {e}")
 
         agent = AIAgent(
             integrity_middleware=middleware,
@@ -259,7 +260,7 @@ class Conversation:
             dict with conversation_root, prompt_roots, and workflow_dir
         """
         if self.is_finalized:
-            return {"error": "Conversation already finalized."}
+            return JSONRPCError.conversation_finalized(self.conversation_id)
 
         # Finalize conversation-level accumulator
         self.conversation_accumulator.finalize()
@@ -469,7 +470,7 @@ class ConversationManager:
         """Finalize a conversation and return integrity info."""
         conversation = self.conversations.get(conversation_id)
         if not conversation:
-            return {"error": f"Conversation {conversation_id} not found."}
+            return JSONRPCError.conversation_not_found(conversation_id)
         return conversation.finalize()
 
     def delete_conversation(self, conversation_id: str) -> dict:
