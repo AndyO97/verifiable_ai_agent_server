@@ -104,6 +104,7 @@ class IntegrityMiddleware:
             self.langfuse_client = LangfuseClient(self.session_id)
             # Use more descriptive trace name with full session ID
             trace_name = f"agent_verified_{self.session_id}"
+            settings = get_settings()
             self.trace_id = self.langfuse_client.create_trace(
                 name=trace_name,
                 metadata={
@@ -112,7 +113,10 @@ class IntegrityMiddleware:
                     "session_id": self.session_id,
                     "middleware_type": "integrity",
                     "cryptography": "KZG-BLS12-381",
-                    "encoding": "RFC-8785"
+                    "encoding": "RFC-8785",
+                    "service.name": settings.otel.service_name,
+                    "service.version": settings.otel.service_version,
+                    "service.instance.id": self.session_id,
                 }
             )
             logger.info("langfuse_initialized", trace_id=self.trace_id)

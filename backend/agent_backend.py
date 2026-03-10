@@ -10,7 +10,7 @@ import asyncio
 import requests
 import re
 from typing import Any, List
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 try:
     from dotenv import load_dotenv
@@ -402,10 +402,36 @@ async def wikipedia_tool(query: str = None, **kwargs) -> str:
             "try 'List of cities by population' or 'List of metropolitan areas'"
         )
 
-async def datetime_tool(format: str = "%Y-%m-%d %H:%M:%S") -> str:
+async def datetime_tool(format: str = "%Y-%m-%d %H:%M:%S", utc_offset: int = 0, **kwargs) -> str:
+    """Return current datetime. By default returns local system time. Provide utc_offset to see UTC with conversion to that timezone."""
     try:
-        now = datetime.now().strftime(format)
-        return f"Current datetime: {now}"
+        # Check if any parameter contains "offset" in its name
+        offset_param_found = None
+        if utc_offset == 0:  # Only look in kwargs if utc_offset wasn't explicitly set
+            for key in kwargs.keys():
+                if 'offset' in key.lower():
+                    offset_param_found = key
+                    try:
+                        utc_offset = int(kwargs[key])
+                    except (ValueError, TypeError):
+                        pass
+                    break
+        
+        # Prepare list of ignored parameters (excluding the offset parameter if found)
+        ignored_params = [k for k in kwargs.keys() if k != offset_param_found]
+        has_extra_params = len(ignored_params) > 0
+        extra_params_note = f" (Note: I only accept 'format' and 'utc_offset' parameters, ignoring: {', '.join(ignored_params)})" if has_extra_params else ""
+        
+        if utc_offset != 0:
+            # User provided offset: show UTC and converted local time
+            now = datetime.now(timezone.utc)
+            utc_time = now.strftime(format)
+            local_time = (now + timedelta(hours=utc_offset)).strftime(format)
+            return f"Current UTC time: {utc_time}. Local time (UTC{utc_offset:+d}): {local_time}.{extra_params_note}"
+        else:
+            # Default: show system local time
+            local_time = datetime.now().strftime(format)
+            return f"The current date and time is {local_time}.{extra_params_note}"
     except Exception as e:
         return f"Error: {str(e)}"
 
@@ -475,11 +501,12 @@ mcp_server.register_tool(ToolDefinition(
 ))
 mcp_server.register_tool(ToolDefinition(
     name="datetime",
-    description="Return current datetime in specified format.",
+    description="Get current date and time. Returns local system time by default (no parameters needed). To get UTC with conversion to other timezones, provide 'utc_offset' (hours from UTC, e.g., -5 for Miami/EST, +1 for CET).",
     input_schema={
         "type": "object",
         "properties": {
-            "format": {"type": "string", "description": "Datetime format", "default": "%Y-%m-%d %H:%M:%S"}
+            "format": {"type": "string", "description": "Datetime format (e.g., '%Y-%m-%d %H:%M:%S'). Default shows full datetime.", "default": "%Y-%m-%d %H:%M:%S"},
+            "utc_offset": {"type": "integer", "description": "Optional: UTC offset in hours (e.g., -5 for Miami/EST, +1 for CET). Only provide if you want UTC time with timezone conversion. Omit for local system time.", "default": 0}
         },
         "required": []
     },

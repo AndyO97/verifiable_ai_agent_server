@@ -30,6 +30,7 @@ import sys
 
 import requests as http_requests
 from requests.auth import HTTPBasicAuth
+from urllib.parse import quote
 
 # Import backend modules
 sys.path.append(os.path.abspath(os.path.dirname(__file__)))
@@ -510,7 +511,7 @@ def _delete_langfuse_session(session_id: str) -> dict:
         auth = HTTPBasicAuth(pub_key, sec_key)
 
         # List traces for this session
-        list_url = f"{endpoint}/api/public/traces?sessionId={session_id}"
+        list_url = f"{endpoint}/api/public/traces?sessionId={quote(session_id, safe='')}"
         resp = http_requests.get(list_url, auth=auth, timeout=10)
         if resp.status_code != 200:
             return {"skipped": True, "reason": f"list_failed_{resp.status_code}"}

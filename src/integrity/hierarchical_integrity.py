@@ -176,11 +176,15 @@ class HierarchicalVerkleMiddleware(IntegrityMiddleware):
             return None
         
         if not self.trace_id:
+            settings = get_settings()
             trace_metadata = {
                 "protocol_version": "MCP-2024-11",
                 "session_id": self.session_id,
                 "middleware_type": "hierarchical_verkle",
                 "cryptography": "KZG-BLS12-381",
+                "service.name": settings.otel.service_name,
+                "service.version": settings.otel.service_version,
+                "service.instance.id": self._langfuse_session_id,
             }
             # Include W3C Trace Context for distributed correlation
             if self._trace_context:
