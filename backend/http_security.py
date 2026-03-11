@@ -88,16 +88,44 @@ class RateLimitBucket:
 class HTTPSecurityManager:
     """
     Manages sessions, nonces, and rate limits.
-    All state is in-memory (acceptable for single-process server).
+    Sessions are persisted to database for restart survival.
+    Nonces and rate limits remain in-memory (short-lived, acceptable to lose).
     """
 
-    def __init__(self):
-        # token -> SessionInfo
+    def __init__(self, db=None):
+        # token -> SessionInfo (in-memory cache, backed by DB)
         self.sessions: dict[str, SessionInfo] = {}
-        # Set of seen nonces (with expiry tracking)
+        self._db = db
+        # Set of seen nonces (with expiry tracking) — in-memory only
         self._nonce_store: dict[str, float] = {}
-        # IP -> RateLimitBucket
+        # IP -> RateLimitBucket — in-memory only
         self._rate_limits: defaultdict[str, RateLimitBucket] = defaultdict(RateLimitBucket)
+
+        # Load persisted sessions from DB on startup
+        if self._db:
+            self._load_sessions_from_db()
+
+    def _load_sessions_from_db(self):
+        """Load non-expired sessions from database into memory."""
+        try:
+            rows = self._db.load_all_http_sessions()
+            now = time.time()
+            loaded = 0
+            for row in rows:
+                if now - row["created_at"] <= SESSION_TTL_SEC:
+                    session = SessionInfo(
+                        token=row["token"],
+                        hmac_key=row["hmac_key"],
+                        created_at=row["created_at"],
+                        ip_address=row["ip_address"],
+                    )
+                    self.sessions[row["token"]] = session
+                    loaded += 1
+            # Clean up expired sessions in DB
+            self._db.cleanup_expired_http_sessions(SESSION_TTL_SEC)
+            logger.info("http_sessions_loaded", count=loaded)
+        except Exception as e:
+            logger.warning("http_sessions_load_failed", error=str(e))
 
     # --- Session management ---
 
@@ -114,6 +142,13 @@ class HTTPSecurityManager:
             ip_address=ip_address,
         )
         self.sessions[token] = session
+
+        # Persist to database
+        if self._db:
+            try:
+                self._db.save_http_session(token, hmac_key, now, ip_address)
+            except Exception as e:
+                logger.warning("http_session_persist_failed", error=str(e))
 
         # Prune expired sessions periodically
         self._prune_sessions(now)
@@ -133,15 +168,25 @@ class HTTPSecurityManager:
             return None
         if time.time() - session.created_at > SESSION_TTL_SEC:
             del self.sessions[token]
+            if self._db:
+                try:
+                    self._db.delete_http_session(token)
+                except Exception:
+                    pass
             return None
         return session
 
     def _prune_sessions(self, now: float):
-        """Remove expired sessions."""
+        """Remove expired sessions from memory and database."""
         expired = [t for t, s in self.sessions.items()
                    if now - s.created_at > SESSION_TTL_SEC]
         for t in expired:
             del self.sessions[t]
+        if self._db and expired:
+            try:
+                self._db.cleanup_expired_http_sessions(SESSION_TTL_SEC)
+            except Exception:
+                pass
 
     # --- Nonce tracking ---
 
