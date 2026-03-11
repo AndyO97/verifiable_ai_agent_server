@@ -138,8 +138,11 @@ app = FastAPI(lifespan=lifespan)
 # Load settings for middleware configuration
 settings = get_settings()
 
+# Initialize database early (needed by HTTPSecurityManager for session persistence)
+db = create_database()
+
 # --- HTTP Transport Security ---
-http_security = HTTPSecurityManager()
+http_security = HTTPSecurityManager(db=db)
 app.add_middleware(HTTPSecurityMiddleware, security_manager=http_security)
 
 # CORS: restrict to configured origins (default: same origin only)
@@ -224,9 +227,6 @@ async def trace_context_middleware(request: Request, call_next):
         response.headers["tracestate"] = ts
 
     return response
-
-# Initialize database (SQLite by default, PostgreSQL if DATABASE_URL is set)
-db = create_database()
 
 # Initialize conversation manager (shared tools and security across conversations)
 conv_manager = ConversationManager(mcp_server=mcp_server, security_middleware=security_middleware)

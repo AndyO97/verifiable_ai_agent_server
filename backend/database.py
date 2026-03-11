@@ -14,6 +14,7 @@ Setup:
 
 import os
 import sqlite3
+import time
 from typing import Optional
 
 # Try to import PostgreSQL driver
@@ -60,6 +61,23 @@ class DatabaseBackend:
         raise NotImplementedError
 
     def update_conversation_owner(self, conversation_id: str, owner_token: str):
+        raise NotImplementedError
+
+    # --- HTTP Session Persistence ---
+
+    def save_http_session(self, token: str, hmac_key: str, created_at: float, ip_address: str):
+        raise NotImplementedError
+
+    def get_http_session(self, token: str) -> Optional[dict]:
+        raise NotImplementedError
+
+    def delete_http_session(self, token: str):
+        raise NotImplementedError
+
+    def load_all_http_sessions(self) -> list[dict]:
+        raise NotImplementedError
+
+    def cleanup_expired_http_sessions(self, ttl_sec: float):
         raise NotImplementedError
 
     def close(self):
@@ -115,6 +133,14 @@ class SQLiteBackend(DatabaseBackend):
                 event_count INTEGER DEFAULT 0,
                 timestamp TEXT,
                 FOREIGN KEY (conversation_id) REFERENCES conversations(conversation_id)
+            )
+        """)
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS http_sessions (
+                token TEXT PRIMARY KEY,
+                hmac_key TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                ip_address TEXT NOT NULL
             )
         """)
         self.conn.commit()
@@ -240,6 +266,34 @@ class SQLiteBackend(DatabaseBackend):
         )
         self.conn.commit()
 
+    # --- HTTP Session Persistence ---
+
+    def save_http_session(self, token: str, hmac_key: str, created_at: float, ip_address: str):
+        self.conn.execute("""
+            INSERT OR REPLACE INTO http_sessions (token, hmac_key, created_at, ip_address)
+            VALUES (?, ?, ?, ?)
+        """, (token, hmac_key, created_at, ip_address))
+        self.conn.commit()
+
+    def get_http_session(self, token: str) -> Optional[dict]:
+        row = self.conn.execute(
+            "SELECT * FROM http_sessions WHERE token = ?", (token,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def delete_http_session(self, token: str):
+        self.conn.execute("DELETE FROM http_sessions WHERE token = ?", (token,))
+        self.conn.commit()
+
+    def load_all_http_sessions(self) -> list[dict]:
+        rows = self.conn.execute("SELECT * FROM http_sessions").fetchall()
+        return [dict(row) for row in rows]
+
+    def cleanup_expired_http_sessions(self, ttl_sec: float):
+        cutoff = time.time() - ttl_sec
+        self.conn.execute("DELETE FROM http_sessions WHERE created_at < ?", (cutoff,))
+        self.conn.commit()
+
     def close(self):
         if self.conn:
             self.conn.close()
@@ -294,6 +348,14 @@ class PostgreSQLBackend(DatabaseBackend):
                     event_accumulator_root TEXT,
                     event_count INTEGER DEFAULT 0,
                     timestamp TEXT
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS http_sessions (
+                    token TEXT PRIMARY KEY,
+                    hmac_key TEXT NOT NULL,
+                    created_at DOUBLE PRECISION NOT NULL,
+                    ip_address TEXT NOT NULL
                 )
             """)
         self.conn.commit()
@@ -423,6 +485,42 @@ class PostgreSQLBackend(DatabaseBackend):
                 "UPDATE conversations SET owner_token = %s WHERE conversation_id = %s",
                 (owner_token, conversation_id)
             )
+        self.conn.commit()
+
+    # --- HTTP Session Persistence ---
+
+    def save_http_session(self, token: str, hmac_key: str, created_at: float, ip_address: str):
+        with self.conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO http_sessions (token, hmac_key, created_at, ip_address)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (token) DO UPDATE SET
+                    hmac_key = EXCLUDED.hmac_key,
+                    created_at = EXCLUDED.created_at,
+                    ip_address = EXCLUDED.ip_address
+            """, (token, hmac_key, created_at, ip_address))
+        self.conn.commit()
+
+    def get_http_session(self, token: str) -> Optional[dict]:
+        with self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("SELECT * FROM http_sessions WHERE token = %s", (token,))
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+    def delete_http_session(self, token: str):
+        with self.conn.cursor() as cur:
+            cur.execute("DELETE FROM http_sessions WHERE token = %s", (token,))
+        self.conn.commit()
+
+    def load_all_http_sessions(self) -> list[dict]:
+        with self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("SELECT * FROM http_sessions")
+            return [dict(row) for row in cur.fetchall()]
+
+    def cleanup_expired_http_sessions(self, ttl_sec: float):
+        cutoff = time.time() - ttl_sec
+        with self.conn.cursor() as cur:
+            cur.execute("DELETE FROM http_sessions WHERE created_at < %s", (cutoff,))
         self.conn.commit()
 
     def close(self):
