@@ -1,5 +1,5 @@
 """
-Agent Server with Remote Tool Integration using AIAgent Class and MCP 2024-11.
+Agent Server with Remote Tool Integration using AIAgent Class and MCP 2025-11-25.
 Demonstrates secure remote tool invocation with full JSON-RPC 2.0 protocol compliance.
 
 Architecture:
@@ -29,7 +29,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from src.integrity import HierarchicalVerkleMiddleware
 from src.transport.secure_mcp import SecureMCPClient
 from src.transport.jsonrpc_protocol import MCPProtocolHandler
-from src.agent import MCPServer, AIAgent, ToolDefinition
+from src.agent import MCPServer, AIAgent, MCPHost, ToolDefinition
 
 # ANSI Colors
 GREEN = "\033[92m"
@@ -63,7 +63,7 @@ class DummySecurityMiddleware:
 
 
 async def main():
-    print(f"{BOLD}Starting Secure Remote Tool Agent Demo (MCP 2024-11 + WebSocket + AIAgent)...{RESET}")
+    print(f"{BOLD}Starting Secure Remote Tool Agent Demo (MCP 2025-11-25 + WebSocket + AIAgent)...{RESET}")
     
     # STEP 1: Initialize Secure Protocol & Integrity Tracking
     print_subheader("STEP 1: Initialize Secure Protocol & Integrity Tracking")
@@ -84,7 +84,7 @@ async def main():
         print(f"{YELLOW}[INFO] Langfuse not available (optional - continuing without observability){RESET}")
     
     print(f"Session ID: {middleware.session_id}") 
-    print(f"{GREEN}[OK] MCPProtocolHandler initialized (version 2024-11){RESET}")
+    print(f"{GREEN}[OK] MCPProtocolHandler initialized (version 2025-11-25){RESET}")
     print(f"{GREEN}[OK] MCPServer initialized (for remote tool registration){RESET}")
     
     # STEP 2: Connect to Remote Tool
@@ -177,12 +177,18 @@ async def main():
             print(f"{RED}[ERROR] Failed to initialize LLM: {e}{RESET}")
             return
         
-        # Create AIAgent with remote tools
-        agent = AIAgent(
+        # Create MCPHost wrapper (MCP 2025-11-25 compliant architecture)
+        # MCPHost encapsulates: integrity_middleware, security_middleware, mcp_server
+        mcp_host = MCPHost(
             integrity_middleware=middleware,
             security_middleware=security_middleware,
             mcp_server=mcp_server,
-            llm_client=llm_client
+        )
+        
+        # Instantiate agent with MCPHost + LLM client only (simplified interface)
+        agent = AIAgent(
+            mcp_host=mcp_host,
+            llm_client=llm_client,
         )
         
         print(f"{GREEN}[OK] AIAgent initialized with remote tools{RESET}\n")
@@ -229,7 +235,7 @@ Once you receive the tool result, state the final numeric answer clearly."""
         # Count MCP events and spans
         span_count = len(middleware.spans)
         
-        print(f"{CYAN}Verifying Integrity locally (Hierarchical Verkle + MCP 2024-11)...{RESET}")
+        print(f"{CYAN}Verifying Integrity locally (Hierarchical Verkle + MCP 2025-11-25)...{RESET}")
         print(f"  - Spans tracked: {span_count}")
         print(f"  - Event accumulator root: {event_accumulator_root}")
         print(f"  - Session root: {session_root}")
@@ -289,7 +295,7 @@ Once you receive the tool result, state the final numeric answer clearly."""
         
         print(f"""{GREEN}Summary:{RESET}
   - Established secure WebSocket connection with remote tool
-  - Made REAL LLM calls via AIAgent with MCP 2024-11 protocol
+  - Made REAL LLM calls via AIAgent with MCP 2025-11-25 protocol
   - Executed remote tool calls through encrypted secure channel
   - Organized into {span_count} hierarchical spans
   - Built hierarchical Verkle tree with per-span + session roots

@@ -2,8 +2,9 @@
 
 A high-integrity, self-hosted AI Agent Server built on the Model Context Protocol (MCP) with cryptographic commitment of all agent–LLM–tool interactions into a **Verkle Tree**.
 
-## 📋 Latest Updates (March 1, 2026)
+## 📋 Latest Updates (March 13, 2026)
 
+- **MCPHost Architecture**: Explicit MCP Host class (MCPHost) orchestrates server/client interactions with encapsulated authorization and integrity tracking
 - **AI Agent Chat Server**: Full-featured web chat interface with FastAPI backend — the primary way to interact with the agent and its tools
 - **Conversation Management**: Create, resume, finalize, and delete conversations with full DB + workflow + Langfuse cleanup
 - **HTTP Transport Security**: HMAC-SHA256 request signing, anti-replay nonces, session tokens, rate limiting — all transparent to the user
@@ -11,6 +12,7 @@ A high-integrity, self-hosted AI Agent Server built on the Model Context Protoco
 - **5 Integrated Tools**: Weather (OpenWeatherMap), Currency Exchange, Math Calculator, Wikipedia Search, Datetime — all with IBS-signed outputs
 - **Conversation Resume**: Seamlessly continue conversations after server restart
 - **Per-Prompt Verkle Roots**: Each prompt/response pair gets its own cryptographic commitment; conversation-level root combines them all
+- **Tool Call Parsing**: Fixed support for tool calls with and without arguments — handles both `{"tool": "datetime"}` and `{"tool": "add", "args": {...}}`
 
 ## 🎯 Core Features
 
@@ -18,7 +20,8 @@ A high-integrity, self-hosted AI Agent Server built on the Model Context Protoco
 - **HTTP Transport Security**: HMAC-SHA256 request signing, session tokens, nonce-based anti-replay, rate limiting, and CORS restrictions
 - **Immutable Run Logs**: All agent interactions (prompts, tool calls, model outputs) are canonically encoded and cryptographically committed
 - **Deterministic Verifiability**: Every run produces a single Verkle root commitment (KZG on BLS12-381) that can be independently verified
-- **MCP 2024-11 Compliance**: Full JSON-RPC 2.0 protocol support with proper initialization handshake and request ID correlation
+- **MCP 2025-11-25 Compliance**: Full JSON-RPC 2.0 protocol support with MCPHost orchestration, proper initialization handshake, and request ID correlation
+- **MCPHost Orchestration**: Explicit MCPHost class manages server lifecycle, tool authorization, integrity recording, and client registration — encapsulating all protocol concerns
 - **Unified Integrity Middleware**: Single middleware object manages both cryptographic commitment and observability (Langfuse)
 - **Replay Resistance**: Sequential monotonic counters, server timestamps, and session IDs prevent unauthorized replay or reordering
 - **Identity-Based Signatures**: Tools cryptographically sign their own outputs using keys derived from their names (BLS12-381), ensuring zero-trust authenticity
@@ -379,15 +382,33 @@ Verkle tree accumulator using KZG commitments over BLS12-381 elliptic curve. Pro
 - Local storage: Saves complete hierarchical structure to disk (6 files per run)
 - Tool signatures preserved: IBS signatures on tool outputs still recorded and verifiable
 
-### `src/transport/jsonrpc_protocol.py` (New)
-JSON-RPC 2.0 protocol implementation with MCP 2024-11 compliance:
+### `src/agent/__init__.py` - MCPHost Architecture (Enhanced)
+**MCPHost**: New orchestration class that encapsulates MCP 2025-11-25 protocol concerns:
+- **Host responsibilities**: Server lifecycle, client registration, tool authorization checks
+- **Tool invocation**: `invoke_tool()` and `invoke_tool_async()` methods handle authorization, integrity recording, and execution
+- **Key methods**:
+  - `invoke_tool(tool_call)` — Sync path: check authorization → record input → execute → record output
+  - `invoke_tool_async(tool_call)` — Async path: same semantics but awaits async tool handlers
+  - `register_remote_tool()` — Register tools from remote sources (SecureMCPClient)
+  - `list_tools()` — Return available tools to the LLM
+- **Integrity integration**: Unauthorized attempts and tool outputs are both recorded for audit purposes
+- **MCP 2025-11-25 compliant**: Full protocol support with capabilities advertisement
+
+**AIAgent (Simplified)**: Now focuses solely on LLM loop logic:
+- Constructor: `AIAgent(mcp_host: MCPHost, llm_client: LLMClient)` (simplified from 4 parameters)
+- Delegates all tool execution to `mcp_host.invoke_tool()` and `mcp_host.invoke_tool_async()`
+- Organizes prompts, manages conversation history, handles multi-turn reasoning
+- Result: Clean separation of concerns (LLM loop vs. tool execution)
+
+### `src/transport/jsonrpc_protocol.py`
+JSON-RPC 2.0 protocol implementation with MCP 2025-11-25 compliance:
 - Standard protocol versioning
 - Request/response correlation with IDs
 - Initialization handshake
 - Error codes per JSON-RPC 2.0 specification
 - Batch request support
 
-### `src/transport/mcp_protocol_adapter.py` (New)
+### `src/transport/mcp_protocol_adapter.py`
 Adapter bridging MCPServer with JSON-RPC 2.0 protocol layer. Handles method routing and MCP specification compliance.
 
 ### `src/agent/__init__.py` (Enhanced)
@@ -427,7 +448,7 @@ python examples/agent_multi_tool_demo.py
 
 Change `PROMPT_INDEX` in the script to select which prompt/tool combination to test. Produces a full workflow folder with canonical logs, commitments, and OTel export.
 
-### Demo 1: Real Prompt Demo - MCP 2024-11 + Integrity Tracking
+### Demo 1: Real Prompt Demo - MCP 2025-11-25 + Integrity Tracking
 
 **What it shows:** Complete Q&A interaction with full MCP JSON-RPC 2.0 handshake and cryptographic commitment
 
@@ -443,19 +464,19 @@ python real_prompt_demo.py
 
 ```
 ================================================================================
-       REAL-TIME AI AGENT WORKFLOW WITH MCP 2024-11 + INTEGRITY TRACKING        
+       REAL-TIME AI AGENT WORKFLOW WITH MCP 2025-11-25 + INTEGRITY TRACKING        
 ================================================================================
 
 This is a REAL agent interaction with full MCP protocol compliance:
   - User sends prompt through AIAgent to OpenRouter API
   - LLM provides genuine response
-  - All communication in MCP 2024-11 format
+  - All communication in MCP 2025-11-25 format
   - Full protocol versioning and initialization
   - All events integrity-tracked with Verkle trees
   - Cryptographically verifiable proof created
   - Anyone can verify what really happened
 
->> STEP 1: Initialize MCP 2024-11 Protocol & Integrity Tracking
+>> STEP 1: Initialize MCP 2025-11-25 Protocol & Integrity Tracking
 
 [OK] MCP Protocol Handler initialized (version 2024-11)
 [OK] MCPServer initialized
@@ -510,7 +531,7 @@ PhvgQaRJ+QZjk/6
 
 Interaction Summary:
   - Total Spans: 3
-  - Protocol Version: 2024-11
+  - Protocol Version: 2025-11-25
   - LLM: arcee-ai/trinity-large-preview:free
 
 Cryptographic Details:
@@ -530,7 +551,7 @@ Verification Status:
 What This Proves:
   - OpenRouter returned this exact response at this time
   - User asked this exact question
-  - All communication followed MCP 2024-11 specification
+  - All communication followed MCP 2025-11-25 specification
   - No tampering occurred
   - Independently verifiable by anyone
 ```
@@ -642,8 +663,8 @@ Hierarchical Span Structure:
        - real-agent-mcp-20260222-144247_agent_turn_2_2: 1 events
        - real-agent-mcp-20260222-144247_agent_finalize_3: 0 events
 
-MCP 2024-11 Protocol Compliance:
-  [OK] Protocol Version: 2024-11
+MCP 2025-11-25 Protocol Compliance:
+  [OK] Protocol Version: 2025-11-25
   [OK] JSON-RPC Version: 2.0
   [OK] Tool Invocation: Supported
   [OK] Multi-Turn Conversations: Supported
@@ -654,7 +675,7 @@ Summary:
   - Total LLM Turns: 2
   - Tools Available: 4
   - Spans Recorded: 4
-  - Protocol Used: MCP 2024-11 with JSON-RPC 2.0
+  - Protocol Used: MCP 2025-11-25 with JSON-RPC 2.0
 
 Cryptographic Details:
   - Curve: BLS12-381 (elliptic curve pairing)

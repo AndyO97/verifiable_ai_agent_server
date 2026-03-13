@@ -27,11 +27,18 @@ if TYPE_CHECKING:
 
 from src.llm import LLMResponse
 
+# Re-export MCP transport components for architectural clarity
+try:
+    from src.transport.secure_mcp import SecureMCPClient, SecureMCPServer
+except ImportError:
+    SecureMCPClient = None  # type: ignore
+    SecureMCPServer = None  # type: ignore
+
 logger = structlog.get_logger(__name__)
 
 
 class IntegrityMetadata(BaseModel):
-    """MCP 2024-11 compliant integrity metadata"""
+    """MCP 2025-11-25 compliant integrity metadata"""
     model_config = ConfigDict(frozen=False)
     
     session_id: str                             # Session identifier
@@ -45,7 +52,7 @@ class IntegrityMetadata(BaseModel):
 
 class AgentResponse(BaseModel):
     """
-    MCP 2024-11 compliant agent response.
+    MCP 2025-11-25 compliant agent response.
     
     Provides a structured contract for agent interactions with:
     - Text output (LLM response)
@@ -271,10 +278,10 @@ class MCPServer:
     def get_capabilities(self) -> dict[str, Any]:
         """Advertise server capabilities per MCP specification.
         
-        Returns compliance information for protocol version 2024-11.
+        Returns compliance information for protocol version 2025-11-25.
         """
         return {
-            "protocolVersion": "2024-11",
+            "protocolVersion": "2025-11-25",
             "capabilities": {
                 "tools": {
                     "enabled": True,
@@ -313,28 +320,28 @@ class MCPServer:
         """
         Verify protocol version compatibility with remote peer.
         
-        Ensures remote is using MCP 2024-11 or compatible patch version.
+        Ensures remote is using MCP 2025-11-25 or compatible patch version.
         Warns if mismatch detected.
         
         Args:
-            remote_version: Version string from remote peer (e.g., "2024-11", "2024-12")
+            remote_version: Version string from remote peer (e.g., "2025-11-25", "2025-12-xx")
         
         Returns:
-            True if version is compatible (2024-xx), False otherwise
+            True if version is compatible (2025-xx), False otherwise
         """
-        expected_version = "2024-11"
+        expected_version = "2025-11-25"
         
         if remote_version == expected_version:
             logger.info("protocol_version_verified", remote_version=remote_version)
             return True
         
-        if remote_version.startswith("2024-"):
-            # Accept 2024-xx patches for backward compatibility
+        if remote_version.startswith("2025-"):
+            # Accept 2025-xx patches for backward compatibility
             logger.warning(
                 "protocol_version_mismatch_patch",
                 expected=expected_version,
                 remote=remote_version,
-                note="Using different 2024-xx patch; JSON-RPC format should be compatible"
+                note="Using different 2025-xx patch; JSON-RPC format should be compatible"
             )
             return True
         
@@ -508,58 +515,237 @@ class MCPServer:
         return result
 
 
-class AIAgent:
+class MCPHost:
     """
-    Main agent class coordinating LLM, tools, and integrity tracking.
-    This is the primary interface for running verifiable agent tasks.
+    MCP 2025-11-25 Host: Orchestrates the MCP server/client lifecycle and tool execution.
     
-    Supports both local and cloud-based LLM backends:
-    - OllamaClient: Local Ollama instance (requires local setup)
-    - OpenRouterClient: Cloud-based OpenRouter.ai API (requires API key)
+    This class stands at the architectural center of the MCP implementation:
+    - Manages the MCPServer (local tool registry)
+    - Manages SecureMCPClient connections to remote tools
+    - Enforces security policies (tool authorization, input validation)
+    - Records all tool interactions via integrity middleware
+    - Supports both synchronous and asynchronous tool invocation
     
-    NOTE: Implements core MCP features (tools, invocation). 
-    Future: Resource reading, prompt templates, and notification subscriptions 
-    for full MCP 2024-11 compliance.
-
+    The MCPHost delegates LLM loop logic to AIAgent and focuses exclusively on:
+    1. Tool authorization (security middleware)
+    2. Tool invocation (MCPServer)
+    3. Integrity recording (integrity middleware)
+    4. Remote tool communication (SecureMCPClient)
+    
+    Architecture:
+        MCPHost (this class)
+        ├── MCPServer: local tool management
+        ├── SecurityMiddleware: authorization enforcement
+        ├── IntegrityMiddleware: cryptographic recording
+        └── SecureMCPClient instances: remote tool clients
+        
+        AIAgent delegates all tool concerns to MCPHost via invoke_tool/invoke_tool_async
     """
     
     def __init__(
         self,
         integrity_middleware: IntegrityMiddleware,
         security_middleware: SecurityMiddleware,
-        mcp_server: MCPServer,
+        mcp_server: MCPServer
+    ):
+        """
+        Initialize the MCP Host.
+        
+        Args:
+            integrity_middleware: Integrity tracking middleware for recording tool interactions
+            security_middleware: Security validation middleware for authorization checks
+            mcp_server: MCPServer instance managing local tool definitions
+        """
+        self.integrity = integrity_middleware
+        self.security = security_middleware
+        self.mcp = mcp_server
+        self.remote_clients: dict[str, Any] = {}  # tool_name -> SecureMCPClient
+        
+        logger.info("mcp_host_initialized", session_id=self.integrity.session_id)
+    
+    def register_remote_tool(
+        self,
+        tool_name: str,
+        host: str,
+        port: int
+    ) -> Any:  # Returns SecureMCPClient
+        """
+        Register a client connection to a remote tool via secure WebSocket.
+        
+        Args:
+            tool_name: Identifier for the remote tool
+            host: Hostname/IP of remote tool server
+            port: WebSocket port of remote tool server
+            
+        Returns:
+            The connected SecureMCPClient instance
+            
+        Raises:
+            RuntimeError: If SecureMCPClient is not available (import failed)
+        """
+        if SecureMCPClient is None:
+            raise RuntimeError(
+                "SecureMCPClient not available. Ensure src/transport/secure_mcp.py is accessible."
+            )
+        
+        client = SecureMCPClient(tool_name, host, port, self.integrity)
+        self.remote_clients[tool_name] = client
+        logger.info("remote_tool_registered", tool_name=tool_name, host=host, port=port)
+        return client
+    
+    def invoke_tool(self, tool_call: Any) -> str:
+        """
+        Synchronously invoke a tool with authorization and integrity recording.
+        
+        Security flow:
+        1. Check tool authorization via security middleware
+        2. Record tool input to integrity log
+        3. Execute tool locally via MCPServer
+        4. Record tool output to integrity log
+        5. Return result to agent
+        
+        Args:
+            tool_call: Object with tool_name and arguments attributes
+            
+        Returns:
+            Tool result as string
+        """
+        # Step 1: Authorization check
+        if not self.security.validate_tool_invocation(
+            self.integrity.session_id, tool_call.tool_name
+        ):
+            error_msg = f"Unauthorized tool: {tool_call.tool_name}"
+            logger.warning("tool_call_blocked", tool=tool_call.tool_name)
+            
+            # Record the blocked attempt for audit purposes
+            self.integrity.record_tool_input(tool_call.tool_name, tool_call.arguments)
+            blocked_result = f"Error: {error_msg}"
+            self.integrity.record_tool_output(tool_call.tool_name, blocked_result)
+            return blocked_result
+        
+        # Step 2-5: Record input, execute, record output
+        self.integrity.record_tool_input(tool_call.tool_name, tool_call.arguments)
+        try:
+            tool_result = self.mcp.invoke_tool(tool_call.tool_name, tool_call.arguments)
+            logger.info("tool_executed", tool=tool_call.tool_name, result=str(tool_result)[:100])
+        except Exception as e:
+            tool_result = f"Error executing tool: {str(e)}"
+            logger.exception("tool_execution_error", tool=tool_call.tool_name)
+        
+        self.integrity.record_tool_output(tool_call.tool_name, tool_result)
+        return tool_result
+    
+    async def invoke_tool_async(self, tool_call: Any) -> str:
+        """
+        Asynchronously invoke a tool with authorization and integrity recording.
+        
+        Identical to invoke_tool but supports async tool handlers via MCPServer.invoke_tool_async.
+        
+        Cryptographic Integrity Note:
+        =============================
+        This method produces IDENTICAL cryptographic commitments to invoke_tool.
+        All integrity recording is synchronous (unchanged).
+        Only tool invocation is async (via MCPServer.invoke_tool_async).
+        
+        Args:
+            tool_call: Object with tool_name and arguments attributes
+            
+        Returns:
+            Tool result as string
+        """
+        # Step 1: Authorization check
+        if not self.security.validate_tool_invocation(
+            self.integrity.session_id, tool_call.tool_name
+        ):
+            error_msg = f"Unauthorized tool: {tool_call.tool_name}"
+            logger.warning("tool_call_blocked", tool=tool_call.tool_name)
+            
+            # Record the blocked attempt for audit purposes
+            self.integrity.record_tool_input(tool_call.tool_name, tool_call.arguments)
+            blocked_result = f"Error: {error_msg}"
+            self.integrity.record_tool_output(tool_call.tool_name, blocked_result)
+            return blocked_result
+        
+        # Step 2-5: Record input, execute, record output
+        self.integrity.record_tool_input(tool_call.tool_name, tool_call.arguments)
+        try:
+            tool_result = await self.mcp.invoke_tool_async(tool_call.tool_name, tool_call.arguments)
+            logger.info("tool_executed", tool=tool_call.tool_name, result=str(tool_result)[:100])
+        except Exception as e:
+            tool_result = f"Error executing tool: {str(e)}"
+            logger.exception("tool_execution_error", tool=tool_call.tool_name)
+        
+        self.integrity.record_tool_output(tool_call.tool_name, tool_result)
+        return tool_result
+    
+    def list_tools(self) -> list[dict[str, Any]]:
+        """
+        List all available tools (from MCPServer).
+        
+        Returns:
+            List of tool schemas with name, description, and input schema
+        """
+        return self.mcp.list_tools()
+    
+    def list_capabilities(self) -> dict[str, Any]:
+        """
+        Advertise MCP host capabilities.
+        
+        Returns:
+            MCP 2025-11-25 compliant capabilities dictionary
+        """
+        return self.mcp.get_capabilities()
+
+
+class AIAgent:
+    """
+    MCP 2025-11-25 Agent: Executes LLM reasoning with tool calling.
+    
+    This class focuses exclusively on the LLM loop:
+    - Validating the LLM client configuration
+    - Building conversation history
+    - Calling the LLM with available tools
+    - Parsing tool calls from LLM responses
+    - Invoking tools via the MCPHost
+    - Building and finalizing agent responses
+    
+    Tool invocation, authorization, and integrity recording are delegated to MCPHost.
+    
+    Supports both local and cloud-based LLM backends:
+    - OllamaClient: Local Ollama instance (requires local setup)
+    - OpenRouterClient: Cloud-based OpenRouter.ai API (requires API key)
+    """
+    
+    def __init__(
+        self,
+        mcp_host: MCPHost,
         llm_client: Optional[Union["OllamaClient", "OpenRouterClient"]] = None
     ):
         """
         Initialize the AI Agent.
         
         Args:
-            integrity_middleware: Integrity tracking middleware
-            security_middleware: Security validation middleware
-            mcp_server: MCP server for tool management
+            mcp_host: MCPHost instance for tool invocation and orchestration
             llm_client: Optional LLM client (OllamaClient or OpenRouterClient)
-                       If None, uses dummy LLM for testing
+                       If None, raises RuntimeError on first run()
                        
         Examples:
-            # Using local Ollama
+            # Setup MCP Host with server and middleware
+            mcp_server = MCPServer(session_id=session_id)
+            mcp_host = MCPHost(integrity_middleware, security_middleware, mcp_server)
+            
+            # Create agent with LLM client
             from src.llm import OllamaClient
             ollama = OllamaClient(model="llama2")
-            agent = AIAgent(..., llm_client=ollama)
+            agent = AIAgent(mcp_host=mcp_host, llm_client=ollama)
             
-            # Using cloud-based OpenRouter
-            from src.llm import OpenRouterClient
-            openrouter = OpenRouterClient(api_key="sk-or-...")
-            agent = AIAgent(..., llm_client=openrouter)
-            
-            # Using dummy LLM (for testing)
-            agent = AIAgent(...)  # llm_client=None by default
+            # Or create with factory LLM
+            agent = AIAgent(mcp_host=mcp_host, llm_client=AIAgent.create_llm_client())
         """
-        self.integrity = integrity_middleware
-        self.security = security_middleware
-        self.mcp = mcp_server
+        self.mcp_host = mcp_host
         self.llm_client = llm_client
         
-        logger.info("ai_agent_initialized", session_id=self.integrity.session_id)
+        logger.info("ai_agent_initialized", session_id=self.mcp_host.integrity.session_id)
     
     @staticmethod
     def create_llm_client() -> Union["OllamaClient", "OpenRouterClient"]:
@@ -614,7 +800,7 @@ class AIAgent:
         Validate LLM client and prepare the execution context.
         
         Starts the top-level integrity span, records the initial prompt,
-        and builds the tool schema list for the LLM.
+        and builds the tool schema list from MCPHost.
         
         Returns:
             Tuple of (model_name, tool_schemas, conversation_history)
@@ -629,12 +815,12 @@ class AIAgent:
                 "Use AIAgent.create_llm_client() to create one automatically."
             )
         
-        self.integrity.start_span("agent_run")
+        self.mcp_host.integrity.start_span("agent_run")
         
         model_name = getattr(self.llm_client, 'model', 'unknown')
-        self.integrity.record_prompt(prompt, metadata={"model": model_name})
+        self.mcp_host.integrity.record_prompt(prompt, metadata={"model": model_name})
         
-        tool_schemas = self.mcp.list_tools()
+        tool_schemas = self.mcp_host.list_tools()
         conversation_history: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
         
         return model_name, tool_schemas, conversation_history
@@ -659,7 +845,7 @@ class AIAgent:
         
         usage = getattr(llm_response, 'usage', {}) or {}
         
-        self.integrity.record_llm_generation(
+        self.mcp_host.integrity.record_llm_generation(
             prompt=conversation_history[-1]["content"],
             response=llm_response.text,
             model=model_name,
@@ -671,52 +857,7 @@ class AIAgent:
         
         return llm_response, usage
 
-    def _check_tool_authorization(self, tool_call: Any) -> Optional[str]:
-        """
-        Check tool authorization and record blocked attempts.
-        
-        Returns:
-            Error result string if the tool is blocked, None if authorized.
-        """
-        if not self.security.validate_tool_invocation(
-            self.integrity.session_id, tool_call.tool_name
-        ):
-            error_msg = f"Unauthorized tool: {tool_call.tool_name}"
-            logger.warning("tool_call_blocked", tool=tool_call.tool_name)
-            self.integrity.record_tool_input(tool_call.tool_name, tool_call.arguments)
-            tool_result = f"Error: {error_msg}"
-            self.integrity.record_tool_output(tool_call.tool_name, tool_result)
-            return tool_result
-        return None
-
-    def _execute_tool_sync(self, tool_call: Any) -> str:
-        """Execute a single tool synchronously with integrity recording."""
-        self.integrity.record_tool_input(tool_call.tool_name, tool_call.arguments)
-        try:
-            tool_result = self.mcp.invoke_tool(tool_call.tool_name, tool_call.arguments)
-            logger.info("tool_executed", tool=tool_call.tool_name, result=str(tool_result)[:100])
-        except Exception as e:
-            tool_result = f"Error executing tool: {str(e)}"
-            logger.exception("tool_execution_error", tool=tool_call.tool_name)
-        self.integrity.record_tool_output(tool_call.tool_name, tool_result)
-        return tool_result
-
-    async def _execute_tool_async(self, tool_call: Any) -> str:
-        """Execute a single tool asynchronously with integrity recording.
-        
-        Supports both sync and async tool handlers via invoke_tool_async.
-        Integrity recording remains synchronous to preserve cryptographic commitments.
-        """
-        self.integrity.record_tool_input(tool_call.tool_name, tool_call.arguments)
-        try:
-            tool_result = await self.mcp.invoke_tool_async(tool_call.tool_name, tool_call.arguments)
-            logger.info("tool_executed", tool=tool_call.tool_name, result=str(tool_result)[:100])
-        except Exception as e:
-            tool_result = f"Error executing tool: {str(e)}"
-            logger.exception("tool_execution_error", tool=tool_call.tool_name)
-        self.integrity.record_tool_output(tool_call.tool_name, tool_result)
-        return tool_result
-
+    
     def _append_tool_results_to_history(
         self,
         conversation_history: list[dict[str, Any]],
@@ -750,11 +891,11 @@ class AIAgent:
                 "output_tokens": last_usage.get("output_tokens", 0),
                 "total_tokens": last_usage.get("total_tokens", 0),
             }
-            self.integrity.record_model_output(final_output, metadata=output_metadata)
+            self.mcp_host.integrity.record_model_output(final_output, metadata=output_metadata)
         
         # Finalize and commit (this finalizes the current span and creates session root)
         # NOTE: Do NOT create an empty agent_finalize span - only commit non-empty spans
-        session_root, commitments, canonical_log_bytes = self.integrity.finalize()
+        session_root, commitments, canonical_log_bytes = self.mcp_host.integrity.finalize()
 
         # Persist canonical log for future audit/verification.
         # The canonical_log_bytes are the raw bytes whose SHA-256 == canonical_log_hash.
@@ -767,7 +908,7 @@ class AIAgent:
         #       and include reference in response for third-party verification.
         
         integrity_metadata = IntegrityMetadata(
-            session_id=self.integrity.session_id,
+            session_id=self.mcp_host.integrity.session_id,
             session_root=session_root,
             event_accumulator_root=commitments.event_accumulator_root,
             span_roots=commitments.span_roots,
@@ -794,14 +935,11 @@ class AIAgent:
         Execute the agent with the given prompt (synchronous).
         
         Workflow:
-        1. Record initial prompt
-        2. Call LLM with available tool schemas
+        1. Record initial prompt via MCPHost
+        2. Call LLM with available tool schemas from MCPHost
         3. Parse tool calls from response
         4. For each tool call:
-           - Validate authorization
-           - Record tool input
-           - Execute tool (sync)
-           - Record tool output
+           - Delegate to MCPHost.invoke_tool() (handles auth, security, record)
         5. Continue until LLM produces final output
         6. Finalize and generate Verkle root
         
@@ -821,8 +959,8 @@ class AIAgent:
         try:
             while turn_count < max_turns:
                 turn_count += 1
-                logger.info("agent_turn_start", turn=turn_count, session_id=self.integrity.session_id)
-                self.integrity.start_span(f"agent_turn_{turn_count}")
+                logger.info("agent_turn_start", turn=turn_count, session_id=self.mcp_host.integrity.session_id)
+                self.mcp_host.integrity.start_span(f"agent_turn_{turn_count}")
                 
                 try:
                     llm_response, last_usage = self._call_llm_and_record(
@@ -834,17 +972,11 @@ class AIAgent:
                         logger.info("agent_final_output", output_len=len(final_output))
                         break
                     
-                    # Process each tool call (sync path)
+                    # Process each tool call — delegate to MCPHost for auth + execution
                     tool_results_parts = []
                     for tool_call in llm_response.tool_calls:
                         logger.info("tool_call_requested", tool=tool_call.tool_name, args=tool_call.arguments)
-                        
-                        blocked_result = self._check_tool_authorization(tool_call)
-                        if blocked_result is not None:
-                            tool_result = blocked_result
-                        else:
-                            tool_result = self._execute_tool_sync(tool_call)
-                        
+                        tool_result = self.mcp_host.invoke_tool(tool_call)
                         tool_results_parts.append(f"Tool '{tool_call.tool_name}' returned: {tool_result}")
                     
                     self._append_tool_results_to_history(
@@ -869,13 +1001,13 @@ class AIAgent:
         """
         Asynchronously execute the agent with the given prompt.
         
-        Identical to run() but supports async tool handlers.
+        Identical to run() but delegates async tool invocation to MCPHost.invoke_tool_async.
         
         Cryptographic Integrity Note:
         =============================
         This method produces IDENTICAL cryptographic commitments to run().
         All integrity recording is synchronous (unchanged).
-        Only tool invocation is async (via invoke_tool_async).
+        Only tool invocation is async (via MCPHost.invoke_tool_async).
         
         Args:
             prompt: Initial user prompt
@@ -893,8 +1025,8 @@ class AIAgent:
         try:
             while turn_count < max_turns:
                 turn_count += 1
-                logger.info("agent_turn_start", turn=turn_count, session_id=self.integrity.session_id)
-                self.integrity.start_span(f"agent_turn_{turn_count}")
+                logger.info("agent_turn_start", turn=turn_count, session_id=self.mcp_host.integrity.session_id)
+                self.mcp_host.integrity.start_span(f"agent_turn_{turn_count}")
                 
                 try:
                     llm_response, last_usage = self._call_llm_and_record(
@@ -906,17 +1038,11 @@ class AIAgent:
                         logger.info("agent_final_output", output_len=len(final_output))
                         break
                     
-                    # Process each tool call (async path)
+                    # Process each tool call (async path) — delegate to MCPHost
                     tool_results_parts = []
                     for tool_call in llm_response.tool_calls:
                         logger.info("tool_call_requested", tool=tool_call.tool_name, args=tool_call.arguments)
-                        
-                        blocked_result = self._check_tool_authorization(tool_call)
-                        if blocked_result is not None:
-                            tool_result = blocked_result
-                        else:
-                            tool_result = await self._execute_tool_async(tool_call)
-                        
+                        tool_result = await self.mcp_host.invoke_tool_async(tool_call)
                         tool_results_parts.append(f"Tool '{tool_call.tool_name}' returned: {tool_result}")
                     
                     self._append_tool_results_to_history(

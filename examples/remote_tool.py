@@ -1,5 +1,5 @@
 """
-Remote Tool Simulator with MCP 2024-11 Compliance.
+Remote Tool Simulator with MCP 2025-11-25 Compliance.
 This script mimics a tool running in a SEPARATE environment (e.g., different server/container).
 It holds its own Identity Key ($SK_{ID}$) and signs its own outputs with full JSON-RPC response binding.
 

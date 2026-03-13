@@ -3,7 +3,7 @@ r"""
 Real-World Demo: Live LLM Agent with MCP Protocol using AIAgent Class
 =====================================================================
 
-This script demonstrates a REAL agent workflow with full MCP 2024-11 compliance:
+This script demonstrates a REAL agent workflow with full MCP 2025-11-25 compliance:
 1. User sends a prompt through AIAgent to configured LLM provider (Ollama or OpenRouter)
 2. LLM provides genuine response
 3. All communication in proper format
@@ -33,7 +33,7 @@ Or as one line:
 ✓ Non-Repudiation: We cannot claim the LLM said something it didn't
 ✓ Authenticity: Cryptographic proof the response is from this session
 ✓ Integrity: SHA-256 hashing proves no tampering
-✓ Protocol Compliance: Full MCP 2024-11 specification adherence
+✓ Protocol Compliance: Full MCP 2025-11-25 specification adherence
 ✓ Public Verification: Anyone can verify without trusting us
 ✓ Determinism: JSON-RPC canonical format ensures reproducibility
 """
@@ -63,7 +63,7 @@ DIM = "\033[2m"
 
 # Import project modules
 from src.integrity import HierarchicalVerkleMiddleware
-from src.agent import MCPServer, AIAgent, AgentResponse
+from src.agent import MCPServer, AIAgent, MCPHost, AgentResponse
 
 
 def print_header(title: str) -> None:
@@ -97,18 +97,18 @@ class DummySecurityMiddleware:
 
 
 def run_real_agent_workflow() -> None:
-    """Run the complete real-world agent workflow with MCP 2024-11 protocol using AIAgent."""
+    """Run the complete real-world agent workflow with MCP 2025-11-25 protocol using AIAgent."""
     
     # Load environment
     load_dotenv()
     provider = os.getenv("LLM_PROVIDER", "ollama").lower()
     
-    print_header("REAL-TIME AI AGENT WORKFLOW WITH MCP 2024-11 + INTEGRITY TRACKING")
+    print_header("REAL-TIME AI AGENT WORKFLOW WITH MCP 2025-11-25 + INTEGRITY TRACKING")
     
     print(f"""{CYAN}This is a REAL agent interaction with full MCP protocol compliance:
   - User sends prompt through AIAgent to LLM provider ({provider})
   - LLM provides genuine response
-  - All communication in MCP 2024-11 format
+  - All communication in MCP 2025-11-25 format
   - Full protocol versioning and initialization
   - All events integrity-tracked with Verkle trees
   - Cryptographically verifiable proof created
@@ -149,12 +149,18 @@ def run_real_agent_workflow() -> None:
         print(f"{RED}[ERROR] Failed to initialize LLM client: {e}{RESET}")
         return
     
-    # Create AI Agent
-    agent = AIAgent(
+    # Create MCPHost wrapper (MCP 2025-11-25 compliant architecture)
+    # MCPHost encapsulates: integrity_middleware, security_middleware, mcp_server
+    mcp_host = MCPHost(
         integrity_middleware=integrity_middleware,
         security_middleware=security_middleware,
         mcp_server=mcp_server,
-        llm_client=llm_client
+    )
+    
+    # Instantiate agent with MCPHost + LLM client only (simplified interface)
+    agent = AIAgent(
+        mcp_host=mcp_host,
+        llm_client=llm_client,
     )
     
     print(f"{GREEN}[OK] AIAgent initialized{RESET}\n")
