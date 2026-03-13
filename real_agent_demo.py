@@ -8,7 +8,7 @@ This script demonstrates a REAL agent workflow using the AIAgent class:
 2. Tools are registered via MCPServer and referenced by ToolDefinition
 3. All interaction is tracked with Verkle tree commitments
 4. Multi-turn conversations with automatic tool execution
-5. Full MCP 2024-11 protocol compliance
+5. Full MCP 2025-11-25 protocol compliance
 
 This is NOT hardcoded - it's a genuine agent interaction with REAL MCP protocol compliance.
 
@@ -365,7 +365,7 @@ Then summarize the findings."""
     for span_id, span_meta in integrity_middleware.spans.items():
         print(f"       - {span_id}: {span_meta.event_count} events")
     
-    print(f"\n{BOLD}MCP 2024-11 Protocol Compliance:{RESET}")
+    print(f"\n{BOLD}MCP 2025-11-25 Protocol Compliance:{RESET}")
     print(f"  {GREEN}[OK]{RESET} Protocol Version: 2024-11")
     print(f"  {GREEN}[OK]{RESET} JSON-RPC Version: 2.0")
     print(f"  {GREEN}[OK]{RESET} Tool Invocation: Supported")
@@ -387,7 +387,7 @@ Then summarize the findings."""
   - Total LLM Turns: {result['turns']}
   - Tools Available: {len(mcp_server.tools)}
   - Spans Recorded: {len(integrity_middleware.spans)}
-  - Protocol Used: MCP 2024-11 with JSON-RPC 2.0
+  - Protocol Used: MCP 2025-11-25 with JSON-RPC 2.0
 
 {BOLD}Cryptographic Details:{RESET}
   - Curve: BLS12-381 (elliptic curve pairing)
@@ -477,7 +477,7 @@ Then summarize the findings."""
     
     print(f"""{GREEN}Summary:{RESET}
   - Used AIAgent class for multi-turn LLM interactions with tool invocation
-  - Made REAL LLM API call ({provider}) with MCP 2024-11 JSON-RPC 2.0 protocol
+  - Made REAL LLM API call ({provider}) with MCP 2025-11-25 JSON-RPC 2.0 protocol
   - Organized into {len(integrity_middleware.spans)} hierarchical spans
   - All tool invocations tracked in canonical log
   - Built hierarchical Verkle tree with per-span + session roots

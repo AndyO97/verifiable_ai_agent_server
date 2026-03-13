@@ -24,7 +24,7 @@ from typing import Optional
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from src.agent import MCPServer, AIAgent
+from src.agent import MCPServer, AIAgent, MCPHost
 from src.integrity import HierarchicalVerkleMiddleware
 from src.security import SecurityMiddleware
 from src.security.key_management import KeyAuthority
@@ -132,10 +132,17 @@ class Conversation:
             })
             return JSONRPCError.internal_error(f"LLM client initialization failed: {e}")
 
-        agent = AIAgent(
+        # Create MCPHost wrapper (MCP 2025-11-25 compliant architecture)
+        # MCPHost encapsulates: integrity_middleware, security_middleware, mcp_server
+        mcp_host = MCPHost(
             integrity_middleware=middleware,
             security_middleware=self.security_middleware,
             mcp_server=self.mcp_server,
+        )
+        
+        # Instantiate agent with MCPHost + LLM client only (simplified interface)
+        agent = AIAgent(
+            mcp_host=mcp_host,
             llm_client=llm_client,
         )
 

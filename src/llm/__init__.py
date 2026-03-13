@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import TYPE_CHECKING, Any, Optional
 
 import requests
@@ -214,11 +215,16 @@ class OllamaClient:
         tool_calls = []
         
         # Look for JSON tool call patterns
-        # This is a simple pattern match for {"tool": "...", "args": {...}}
-        import re
+        # Handles both with and without args:
+        # - {"tool": "datetime"} (no args)
+        # - {"tool": "add", "args": {"a": 5, "b": 3}} (with args)
         
-        pattern = r'\{"tool":\s*"([^"]+)",\s*"args":\s*({.*?})\}'
-        matches = re.findall(pattern, response_text)
+        # Two patterns: with and without args field
+        pattern_with_args = r'\{"tool":\s*"([^"]+)",\s*"args":\s*({.*?})\}'
+        pattern_no_args = r'\{"tool":\s*"([^"]+)"\s*\}'
+        
+        # First try pattern with args
+        matches = re.findall(pattern_with_args, response_text)
         
         for tool_name, args_str in matches:
             try:
@@ -227,6 +233,16 @@ class OllamaClient:
                 logger.info("tool_call_parsed", tool=tool_name, args=args)
             except json.JSONDecodeError as e:
                 logger.warning("tool_call_parse_error", args_str=args_str, error=str(e))
+        
+        # Then try pattern without args (matches are just tool names)
+        matches_no_args = re.findall(pattern_no_args, response_text)
+        
+        for tool_name in matches_no_args:
+            # Skip if we already parsed this tool call (via pattern_with_args)
+            # by checking if it's already in tool_calls
+            if not any(tc.tool_name == tool_name for tc in tool_calls):
+                tool_calls.append(ToolCall(tool_name, {}))
+                logger.info("tool_call_parsed", tool=tool_name, args={})
         
         return tool_calls
 
@@ -475,10 +491,16 @@ class OpenRouterClient:
         tool_calls = []
         
         # Look for JSON tool call patterns
-        import re
+        # Handles both with and without args:
+        # - {"tool": "datetime"} (no args)
+        # - {"tool": "add", "args": {"a": 5, "b": 3}} (with args)
         
-        pattern = r'\{"tool":\s*"([^"]+)",\s*"args":\s*({.*?})\}'
-        matches = re.findall(pattern, response_text)
+        # Two patterns: with and without args field
+        pattern_with_args = r'\{"tool":\s*"([^"]+)",\s*"args":\s*({.*?})\}'
+        pattern_no_args = r'\{"tool":\s*"([^"]+)"\s*\}'
+        
+        # First try pattern with args
+        matches = re.findall(pattern_with_args, response_text)
         
         for tool_name, args_str in matches:
             try:
@@ -487,5 +509,15 @@ class OpenRouterClient:
                 logger.info("tool_call_parsed", tool=tool_name, args=args)
             except json.JSONDecodeError as e:
                 logger.warning("tool_call_parse_error", args_str=args_str, error=str(e))
+        
+        # Then try pattern without args (matches are just tool names)
+        matches_no_args = re.findall(pattern_no_args, response_text)
+        
+        for tool_name in matches_no_args:
+            # Skip if we already parsed this tool call (via pattern_with_args)
+            # by checking if it's already in tool_calls
+            if not any(tc.tool_name == tool_name for tc in tool_calls):
+                tool_calls.append(ToolCall(tool_name, {}))
+                logger.info("tool_call_parsed", tool=tool_name, args={})
         
         return tool_calls

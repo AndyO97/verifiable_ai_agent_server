@@ -78,7 +78,7 @@
 
 | Metric | Value |
 |--------|-------|
-| **Architecture** | HierarchicalVerkleMiddleware + Hierarchical Spans + MCP 2024-11 JSON-RPC 2.0 |
+| **Architecture** | HierarchicalVerkleMiddleware + Hierarchical Spans + MCP 2025-11-25 JSON-RPC 2.0 |
 | **Chat Server** | FastAPI backend + web frontend with HMAC-SHA256 transport security |
 | **Cryptography** | Per-Span + Session-Level KZG commitments on BLS12-381, deterministic via RFC 8785 |
 | **HTTP Security** | HMAC-SHA256 signing, session tokens, nonce anti-replay, rate limiting, CORS |
@@ -123,7 +123,7 @@ middleware.save_to_local_storage(Path("workflow_abc123"))  # 6 files created
 
 ### 2. ✅ JSON-RPC 2.0 Protocol Implementation
 **Added Files**:
-- `src/transport/jsonrpc_protocol.py` (463 lines) - Complete protocol with MCP 2024-11 compliance
+- `src/transport/jsonrpc_protocol.py` (463 lines) - Complete protocol with MCP 2025-11-25 compliance
 - `src/transport/mcp_protocol_adapter.py` (231 lines) - MCP routing and method handling
 
 **Features**:
@@ -133,7 +133,7 @@ middleware.save_to_local_storage(Path("workflow_abc123"))  # 6 files created
 - Error codes per JSON-RPC 2.0 specification
 - Batch request support
 
-### 3. ✅ MCP 2024-11 Compliance with Hierarchical Spans Across All Demos
+### 3. ✅ MCP 2025-11-25 Compliance with Hierarchical Spans Across All Demos
 - **real_prompt_demo.py**: 3-span structure (mcp_initialize, user_interaction, final_response) with session root
 - **real_agent_demo.py**: 4-span agent (mcp_initialize, user_interaction, tool_execution, final_response) with multi-turn tool calls
 - **agent_remote_demo.py**: Secure remote execution with 4 spans, IBS signature verification, encrypted tool invocation
@@ -327,7 +327,7 @@ Execution time: ~3-4 minutes full suite
 ### Demo 1: Real Prompt Demo
 - **Commitment**: B0YvoTEYhmjuD1Y7Bqn87/7ym31sl0SiRJbSfV2m3FE1JZIyMKRg92tjRZDuQMi2
 - **Events Tracked**: 4 (prompt, routing, response, final)
-- **Protocol**: MCP 2024-11 with initialize + tools/call
+- **Protocol**: MCP 2025-11-25 with initialize + tools/call
 - **Status**: ✅ Tested with OpenRouter API
 
 ### Demo 2: Real Agent Demo
@@ -375,7 +375,7 @@ Execution time: ~3-4 minutes full suite
 
 ### Ready for Production
 ✅ Core integrity tracking  
-✅ MCP 2024-11 protocol compliance  
+✅ MCP 2025-11-25 protocol compliance  
 ✅ JSON-RPC 2.0 implementation  
 ✅ Langfuse integration (optional)  
 ✅ OTel span export  
@@ -403,7 +403,7 @@ Execution time: ~3-4 minutes full suite
 
 ### src/transport/
 - **jsonrpc_protocol.py** (NEW): Complete JSON-RPC 2.0 protocol implementation
-- **mcp_protocol_adapter.py** (NEW): MCP 2024-11 routing and method handling
+- **mcp_protocol_adapter.py** (NEW): MCP 2025-11-25 routing and method handling
 - **secure_mcp.py**: Secure MCP server for remote tool execution
 
 ### src/agent/
@@ -519,7 +519,7 @@ All events follow RFC 8785 canonical encoding:
 
 ✅ **Immutable Logs**: All events canonically encoded + KZG committed  
 ✅ **Deterministic Verification**: Same events produce same commitment  
-✅ **MCP Compliance**: Full JSON-RPC 2.0 + MCP 2024-11 implementation  
+✅ **MCP Compliance**: Full JSON-RPC 2.0 + MCP 2025-11-25 implementation  
 ✅ **Observability**: Automatic Langfuse + OTel integration  
 ✅ **Public Verification**: Independent verification CLI  
 ✅ **Security**: Tool signatures, authorization, replay resistance  
@@ -571,7 +571,7 @@ All events follow RFC 8785 canonical encoding:
 | **Demos** | 3 with hierarchical spans (all tested) |
 | **Span Types** | 4 (mcp_initialize, user_interaction, tool_execution, final_response) |
 | **Files Per Run** | 5 (canonical_log.jsonl, spans_structure.json, commitments.json, metadata.json, otel_export.json) |
-| **Version** | 2024-11 (MCP) with Hierarchical Verkle |
+| **Version** | 2025-11-25 (MCP) with Hierarchical Verkle |
 | **Python** | 3.11+ |
 
 ---

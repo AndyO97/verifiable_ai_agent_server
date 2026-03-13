@@ -105,7 +105,7 @@ from unittest.mock import Mock, MagicMock, patch
 import pytest
 
 from src.llm import OllamaClient, LLMResponse, ToolCall
-from src.agent import AIAgent, MCPServer, ToolDefinition
+from src.agent import AIAgent, MCPServer, MCPHost, ToolDefinition
 from src.integrity import IntegrityMiddleware
 from src.integrity.hierarchical_integrity import HierarchicalVerkleMiddleware
 from src.security import SecurityMiddleware
@@ -228,10 +228,9 @@ class TestAIAgentWithMockLLM:
     
     def test_agent_initialization(self, integrity_middleware, security_middleware, mcp_server, mock_ollama_client):
         """Test AIAgent initializes correctly"""
-        agent = AIAgent(integrity_middleware, security_middleware, mcp_server, mock_ollama_client)
-        assert agent.integrity == integrity_middleware
-        assert agent.security == security_middleware
-        assert agent.mcp == mcp_server
+        mcp_host = MCPHost(integrity_middleware, security_middleware, mcp_server)
+        agent = AIAgent(mcp_host, mock_ollama_client)
+        assert agent.mcp_host == mcp_host
         assert agent.llm_client == mock_ollama_client
     
     def test_agent_run_simple_response(self, integrity_middleware, security_middleware, mcp_server, mock_ollama_client):
@@ -244,7 +243,8 @@ class TestAIAgentWithMockLLM:
         )
         mock_ollama_client.call_llm.return_value = mock_llm_response
         
-        agent = AIAgent(integrity_middleware, security_middleware, mcp_server, mock_ollama_client)
+        mcp_host = MCPHost(integrity_middleware, security_middleware, mcp_server)
+        agent = AIAgent(mcp_host, mock_ollama_client)
         result = agent.run("What's the weather?", max_turns=5)
         
         assert result["output"] == "The weather is sunny today"
@@ -267,7 +267,8 @@ class TestAIAgentWithMockLLM:
         
         mock_ollama_client.call_llm.side_effect = [tool_call_response, final_response]
         
-        agent = AIAgent(integrity_middleware, security_middleware, mcp_server, mock_ollama_client)
+        mcp_host = MCPHost(integrity_middleware, security_middleware, mcp_server)
+        agent = AIAgent(mcp_host, mock_ollama_client)
         result = agent.run("Calculate 5 + 3", max_turns=5)
         
         assert result["output"] == "The result of 5 + 3 is 8"
@@ -298,7 +299,8 @@ class TestAIAgentWithMockLLM:
         
         mock_ollama_client.call_llm.side_effect = [turn1_response, turn2_response, turn3_response]
         
-        agent = AIAgent(integrity_middleware, security_middleware, mcp_server, mock_ollama_client)
+        mcp_host = MCPHost(integrity_middleware, security_middleware, mcp_server)
+        agent = AIAgent(mcp_host, mock_ollama_client)
         result = agent.run("Calculate (10 + 5) * 2", max_turns=5)
         
         assert "30" in result["output"]
@@ -317,7 +319,8 @@ class TestAIAgentWithMockLLM:
         
         mock_ollama_client.call_llm.return_value = tool_response
         
-        agent = AIAgent(integrity_middleware, security_middleware, mcp_server, mock_ollama_client)
+        mcp_host = MCPHost(integrity_middleware, security_middleware, mcp_server)
+        agent = AIAgent(mcp_host, mock_ollama_client)
         result = agent.run("Infinite loop", max_turns=3)
         
         # Should stop at max_turns
@@ -343,7 +346,8 @@ class TestAIAgentWithMockLLM:
         
         mock_ollama_client.call_llm.side_effect = [unauthorized_response, final_response]
         
-        agent = AIAgent(integrity_middleware, restricted_security, mcp_server, mock_ollama_client)
+        mcp_host = MCPHost(integrity_middleware, restricted_security, mcp_server)
+        agent = AIAgent(mcp_host, mock_ollama_client)
         result = agent.run("Try to subtract", max_turns=5)
         
         assert "blocked" in result["output"].lower()
@@ -367,7 +371,8 @@ class TestAIAgentWithMockLLM:
         
         mock_ollama_client.call_llm.side_effect = [error_response, final_response]
         
-        agent = AIAgent(integrity_middleware, security_middleware, mcp_server, mock_ollama_client)
+        mcp_host = MCPHost(integrity_middleware, security_middleware, mcp_server)
+        agent = AIAgent(mcp_host, mock_ollama_client)
         result = agent.run("Trigger error", max_turns=5)
         
         assert "error" in result["output"].lower()
@@ -376,7 +381,8 @@ class TestAIAgentWithMockLLM:
     
     def test_agent_raises_without_llm_client(self, integrity_middleware, security_middleware, mcp_server):
         """Test agent raises RuntimeError when no LLM client is configured"""
-        agent = AIAgent(integrity_middleware, security_middleware, mcp_server, llm_client=None)
+        mcp_host = MCPHost(integrity_middleware, security_middleware, mcp_server)
+        agent = AIAgent(mcp_host, llm_client=None)
         
         with pytest.raises(RuntimeError, match="No LLM client configured"):
             agent.run("Test prompt", max_turns=5)
@@ -404,7 +410,8 @@ class TestIntegrityTrackingWithLLM:
         
         mock_ollama_client.call_llm.side_effect = [tool_response, final_response]
         
-        agent = AIAgent(integrity_middleware, security_middleware, mcp_server, mock_ollama_client)
+        mcp_host = MCPHost(integrity_middleware, security_middleware, mcp_server)
+        agent = AIAgent(mcp_host, mock_ollama_client)
         result = agent.run("5 + 3 = ?", max_turns=5)
         
         metadata = result["integrity"]
@@ -434,7 +441,8 @@ class TestIntegrityTrackingWithLLM:
         for i in range(2):
             integrity = HierarchicalVerkleMiddleware(f"deterministic-test-{i}")
             mock_ollama_client.call_llm.side_effect = [tool_response, final_response]
-            agent = AIAgent(integrity, security_middleware, mcp_server, mock_ollama_client)
+            mcp_host = MCPHost(integrity, security_middleware, mcp_server)
+            agent = AIAgent(mcp_host, mock_ollama_client)
             result = agent.run("5 + 3 = ?", max_turns=5)
             roots.append(result["integrity"]["session_root"])
         
@@ -457,7 +465,8 @@ class TestIntegrityTrackingWithLLM:
         
         mock_ollama_client.call_llm.side_effect = [tool_response, final_response]
         
-        agent = AIAgent(integrity_middleware, security_middleware, mcp_server, mock_ollama_client)
+        mcp_host = MCPHost(integrity_middleware, security_middleware, mcp_server)
+        agent = AIAgent(mcp_host, mock_ollama_client)
         result = agent.run("5 + 3 = ?", max_turns=5)
         
         # Counters should be 0, 1, 2, 3 for prompt, tool_in, tool_out, final_out
@@ -473,7 +482,8 @@ class TestIntegrityTrackingWithLLM:
         
         mock_ollama_client.call_llm.return_value = response
         
-        agent = AIAgent(integrity_middleware, security_middleware, mcp_server, mock_ollama_client)
+        mcp_host = MCPHost(integrity_middleware, security_middleware, mcp_server)
+        agent = AIAgent(mcp_host, mock_ollama_client)
         result = agent.run("Simple query", max_turns=5)
         
         metadata = result["integrity"]
@@ -515,7 +525,8 @@ class TestSecurityWithLLM:
         
         mock_ollama_client.call_llm.side_effect = responses
         
-        agent = AIAgent(integrity_middleware, restricted_security, mcp_server, mock_ollama_client)
+        mcp_host = MCPHost(integrity_middleware, restricted_security, mcp_server)
+        agent = AIAgent(mcp_host, mock_ollama_client)
         result = agent.run("Try unauthorized tools", max_turns=5)
         
         assert "blocked" in result["output"].lower()
@@ -534,7 +545,8 @@ class TestSecurityWithLLM:
         
         mock_ollama_client.call_llm.side_effect = [response, final]
         
-        agent = AIAgent(integrity_middleware, restricted_security, mcp_server, mock_ollama_client)
+        mcp_host = MCPHost(integrity_middleware, restricted_security, mcp_server)
+        agent = AIAgent(mcp_host, mock_ollama_client)
         result = agent.run("Try subtract", max_turns=5)
         
         # Tool should be blocked
@@ -552,7 +564,8 @@ class TestSecurityWithLLM:
         
         mock_ollama_client.call_llm.side_effect = [response, final]
         
-        agent = AIAgent(integrity_middleware, security_middleware, mcp_server, mock_ollama_client)
+        mcp_host = MCPHost(integrity_middleware, security_middleware, mcp_server)
+        agent = AIAgent(mcp_host, mock_ollama_client)
         result = agent.run("Add 5 + 3", max_turns=5)
         
         # Should execute successfully

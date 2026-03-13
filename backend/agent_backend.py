@@ -20,7 +20,7 @@ except ImportError:
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from src.agent import MCPServer, AIAgent, ToolDefinition
+from src.agent import MCPServer, AIAgent, MCPHost, ToolDefinition
 from src.integrity import HierarchicalVerkleMiddleware
 from src.security import SecurityMiddleware
 from src.config import get_settings
@@ -521,18 +521,34 @@ security_middleware.register_from_mcp_server(mcp_server)
 async def answer_prompt(prompt: str) -> str:
     """
     Run the agent on the given prompt and return the output string.
+    
+    Architecture (MCP 2025-11-25 compliant):
+    1. Create integrity and security middleware
+    2. Wrap them in MCPHost (orchestration layer)
+    3. Pass MCPHost to AIAgent (LLM reasoning layer)
     """
-    middleware = HierarchicalVerkleMiddleware(session_id=mcp_server.session_id)
+    # Initialize integrity middleware for this session
+    integrity_middleware = HierarchicalVerkleMiddleware(session_id=mcp_server.session_id)
+    
+    # Create MCP Host (orchestrates server, security, integrity)
+    mcp_host = MCPHost(
+        integrity_middleware=integrity_middleware,
+        security_middleware=security_middleware,
+        mcp_server=mcp_server
+    )
+    
+    # Initialize LLM client
     try:
         llm_client = AIAgent.create_llm_client()
     except Exception as e:
         return f"Error initializing LLM client: {e}"
+    
+    # Create agent (accepts only MCPHost + LLM client)
     agent = AIAgent(
-        integrity_middleware=middleware,
-        security_middleware=security_middleware,
-        mcp_server=mcp_server,
+        mcp_host=mcp_host,
         llm_client=llm_client
     )
+    
     try:
         result = await agent.run_async(prompt=prompt, max_turns=6)
         return clean_latex_notation(result['output'])

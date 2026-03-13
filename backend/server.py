@@ -56,11 +56,11 @@ MAX_CONVERSATION_ID_LENGTH = 256  # Maximum conversation ID length
 CONVERSATION_ID_PATTERN = re.compile(r'^[a-zA-Z0-9-]+$')  # Alphanumeric + hyphens only
 
 # --- MCP Response Wrapper (Issue #10) ---
-# Wraps responses with _meta field for MCP 2024-11 compliance
+# Wraps responses with _meta field for MCP 2025-11-25 compliance
 
 def mcp_response(result: dict, progress_token: str = None, pagination: dict = None) -> dict:
     """
-    Wrap result in MCP 2024-11 compliant response structure.
+    Wrap result in MCP 2025-11-25 compliant response structure.
     
     Args:
         result: The actual response data
