@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 import ast
+import ssl
 from dataclasses import dataclass
 import websockets
 from websockets.server import serve
@@ -34,9 +35,17 @@ class SecureMCPServer:
     Server-side transport (The Tool Listener).
     Accepts connections from the Agent (Client), performs ECDH, receives keys, and serves requests.
     """
-    def __init__(self, tool_name: str, port: int = 5555):
+    def __init__(
+        self,
+        tool_name: str,
+        port: int = 5555,
+        ssl_context: Optional[ssl.SSLContext] = None,
+        require_tls_channel_binding: bool = False,
+    ):
         self.tool_name = tool_name
         self.port = port
+        self.ssl_context = ssl_context
+        self.require_tls_channel_binding = require_tls_channel_binding
         self.signer: Optional[ToolSigner] = None
         self.session: Optional[SecureSession] = None
         
@@ -52,9 +61,34 @@ class SecureMCPServer:
             await self._handle_connection(websocket, handler_func)
 
         # Serve forever
-        async with serve(connection_handler, "0.0.0.0", self.port):
-            logger.info(f"Secure MCP Tool '{self.tool_name}' listening on ws://0.0.0.0:{self.port}")
+        async with serve(connection_handler, "0.0.0.0", self.port, ssl=self.ssl_context):
+            scheme = "wss" if self.ssl_context else "ws"
+            logger.info(f"Secure MCP Tool '{self.tool_name}' listening on {scheme}://0.0.0.0:{self.port}")
             await asyncio.Future()  # valid trick to run forever
+
+    @staticmethod
+    def _get_tls_channel_binding(websocket: Any) -> Optional[bytes]:
+        """Extract channel binding material from TLS transport, if available."""
+        transport = getattr(websocket, "transport", None)
+        if transport is None:
+            return None
+
+        ssl_obj = transport.get_extra_info("ssl_object")
+        if ssl_obj is None:
+            return None
+
+        exporter = getattr(ssl_obj, "export_keying_material", None)
+        if callable(exporter):
+            try:
+                return exporter("EXPORTER-Channel-Binding", 32, None)
+            except Exception:
+                logger.debug("tls_exporter_unavailable", exc_info=True)
+
+        try:
+            return ssl_obj.get_channel_binding("tls-unique")
+        except Exception:
+            logger.debug("tls_unique_unavailable", exc_info=True)
+            return None
 
     async def _handle_connection(self, websocket, handler: Callable):
         try:
@@ -69,7 +103,20 @@ class SecureMCPServer:
             if not peer_pub_bytes: return
             
             peer_pub = kex.load_public_key(peer_pub_bytes)
-            shared_key = kex.derive_shared_key(priv, peer_pub)
+
+            channel_binding = self._get_tls_channel_binding(websocket)
+            if self.require_tls_channel_binding and channel_binding is None:
+                raise RuntimeError(
+                    "TLS channel binding is required but unavailable. Use wss:// with TLS enabled."
+                )
+
+            if channel_binding is None:
+                logger.warning(
+                    "secure_channel_without_tls_binding",
+                    extra={"tool_name": self.tool_name, "remote": str(websocket.remote_address)},
+                )
+
+            shared_key = kex.derive_shared_key(priv, peer_pub, channel_binding=channel_binding)
             
             self.session = SecureSession(websocket, shared_key, peer_identity="Agent")
             logger.info("Secure Channel Established")
@@ -148,17 +195,53 @@ class SecureMCPClient:
     Client-side transport (The Agent).
     Connects to tools, establishes security context, and verifies signatures.
     """
-    def __init__(self, tool_name: str, host: str, port: int, middleware):
+    def __init__(
+        self,
+        tool_name: str,
+        host: str,
+        port: int,
+        middleware,
+        use_tls: bool = False,
+        ssl_context: Optional[ssl.SSLContext] = None,
+        require_tls_channel_binding: bool = False,
+    ):
         self.tool_name = tool_name
-        self.uri = f"ws://{host}:{port}"
+        self.use_tls = use_tls
+        self.uri = f"{'wss' if use_tls else 'ws'}://{host}:{port}"
+        self.ssl_context = ssl_context
+        self.require_tls_channel_binding = require_tls_channel_binding
         self.middleware = middleware # Reference to IntegrityMiddleware for keys
         self.session: Optional[SecureSession] = None
         self.ws = None
+
+    @staticmethod
+    def _get_tls_channel_binding(websocket: Any) -> Optional[bytes]:
+        """Extract channel binding material from TLS transport, if available."""
+        transport = getattr(websocket, "transport", None)
+        if transport is None:
+            return None
+
+        ssl_obj = transport.get_extra_info("ssl_object")
+        if ssl_obj is None:
+            return None
+
+        exporter = getattr(ssl_obj, "export_keying_material", None)
+        if callable(exporter):
+            try:
+                return exporter("EXPORTER-Channel-Binding", 32, None)
+            except Exception:
+                logger.debug("tls_exporter_unavailable", exc_info=True)
+
+        try:
+            return ssl_obj.get_channel_binding("tls-unique")
+        except Exception:
+            logger.debug("tls_unique_unavailable", exc_info=True)
+            return None
         
     async def connect_and_provision(self):
         """Perform handshake and provisioning"""
         logger.info(f"Connecting to {self.uri}...")
-        self.ws = await connect(self.uri)
+        self.ws = await connect(self.uri, ssl=self.ssl_context)
         
         # 1. Mutually Authenticated ECDH (Simplified to Server-Auth for now)
         priv, pub = kex.generate_ecdh_keypair()
@@ -170,7 +253,19 @@ class SecureMCPClient:
         # Send Client Hello
         await self.ws.send(kex.serialize_public_key(pub))
         
-        shared_key = kex.derive_shared_key(priv, peer_pub)
+        channel_binding = self._get_tls_channel_binding(self.ws)
+        if self.require_tls_channel_binding and channel_binding is None:
+            raise RuntimeError(
+                "TLS channel binding is required but unavailable. Use wss:// with TLS enabled."
+            )
+
+        if channel_binding is None:
+            logger.warning(
+                "secure_channel_without_tls_binding",
+                extra={"tool_name": self.tool_name, "uri": self.uri},
+            )
+
+        shared_key = kex.derive_shared_key(priv, peer_pub, channel_binding=channel_binding)
         self.session = SecureSession(self.ws, shared_key, peer_identity=self.tool_name)
         logger.info(f"Secure handshake with {self.tool_name} complete.")
         
