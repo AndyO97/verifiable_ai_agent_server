@@ -321,12 +321,29 @@ async def currency_tool(from_currency: str = None, to_currency: str = None, **kw
 
 async def math_tool(expression: str = None, **kwargs) -> str:
     if expression is None:
+        # Accept common aliases the model may emit.
+        expression = (
+            kwargs.get("expr")
+            or kwargs.get("equation")
+            or kwargs.get("formula")
+            or kwargs.get("calculation")
+        )
+
+    if expression is None:
         for k, v in kwargs.items():
             if k.startswith('expr'):
                 expression = v
                 break
+
     if not expression:
-        return "Error: No expression provided."
+        if kwargs:
+            keys = ", ".join(sorted(kwargs.keys()))
+            return (
+                "Error: No expression provided. "
+                f"Received parameters: {keys}. "
+                "Use math with an 'expression' field, e.g. {'expression': '27**2'}."
+            )
+        return "Error: No expression provided. Use {'expression': '2+3'}"
     try:
         evaluator = SafeMathEvaluator()
         result = evaluator.evaluate(expression)
