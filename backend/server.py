@@ -22,9 +22,10 @@ Visit http://localhost:8000 (HTTP) or https://localhost:8000 (HTTPS) in your bro
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+import base64
 import os
 import sys
 
@@ -123,8 +124,13 @@ def verify_conversation_access(conversation_id: str, session_token: str, db_reco
     owner = db_record.get("owner_token")
     if not owner or owner == session_token:
         return True, ""
-    # Owner exists but doesn't match — check if owner's session is still active
-    if http_security.get_session(owner) is not None:
+    # Owner exists but doesn't match — allow reclaim if both sessions are from same client IP
+    owner_session = http_security.get_session(owner)
+    current_session = http_security.get_session(session_token)
+    if owner_session is not None:
+        if current_session and owner_session.ip_address == current_session.ip_address:
+            db.update_conversation_owner(conversation_id, session_token)
+            return True, ""
         return False, "Access denied: this conversation belongs to another session."
     # Owner session expired — reclaim
     db.update_conversation_owner(conversation_id, session_token)
@@ -185,12 +191,17 @@ async def add_security_headers(request: Request, call_next):
     - Permissions-Policy: Disables unnecessary browser features
     - Strict-Transport-Security: Enforces HTTPS (for production with TLS)
     """
+    # Generate a per-request CSP nonce and expose it to route handlers.
+    csp_nonce = base64.b64encode(os.urandom(16)).decode("ascii").rstrip("=")
+    request.state.csp_nonce = csp_nonce
+
     response = await call_next(request)
     
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline'; "
-        "style-src 'self' 'unsafe-inline'; "
+        f"script-src 'self' 'nonce-{csp_nonce}'; "
+        "style-src 'self'; "
+        "style-src-attr 'none'; "
         "img-src 'self' data: https:; "
         "font-src 'self'; "
         "connect-src 'self'; "
@@ -253,9 +264,15 @@ app.mount("/static", StaticFiles(directory=frontend_path), name="static")
 
 
 @app.get("/")
-def serve_index():
+def serve_index(request: Request):
     index_file = os.path.join(frontend_path, "index.html")
-    return FileResponse(index_file, media_type="text/html")
+    with open(index_file, "r", encoding="utf-8") as f:
+        html = f.read()
+
+    csp_nonce = getattr(request.state, "csp_nonce", "")
+    html = html.replace("{{CSP_NONCE}}", csp_nonce)
+
+    return HTMLResponse(content=html)
 
 
 @app.get("/favicon.ico")
@@ -297,18 +314,26 @@ async def create_conversation(request: Request):
 async def list_conversations(request: Request):
     """List conversations owned by the current session."""
     session_token = get_session_token(request)
+    current_session = http_security.get_session(session_token)
     all_convs = db.list_conversations()
     visible = []
     for conv in all_convs:
         owner = conv.get("owner_token")
         if not owner or owner == session_token:
             visible.append(conv)
-        elif http_security.get_session(owner) is None:
-            # Owner session expired — reclaim for current session
-            db.update_conversation_owner(conv["conversation_id"], session_token)
-            conv["owner_token"] = session_token
-            visible.append(conv)
-        # else: owned by active session of another user — hide
+        else:
+            owner_session = http_security.get_session(owner)
+            if owner_session is None:
+                # Owner session expired — reclaim for current session
+                db.update_conversation_owner(conv["conversation_id"], session_token)
+                conv["owner_token"] = session_token
+                visible.append(conv)
+            elif current_session and owner_session.ip_address == current_session.ip_address:
+                # Same client IP (token churn after reload/re-init) — reclaim ownership
+                db.update_conversation_owner(conv["conversation_id"], session_token)
+                conv["owner_token"] = session_token
+                visible.append(conv)
+            # else: owned by active session of another user — hide
     return mcp_response(
         visible,
         pagination={
