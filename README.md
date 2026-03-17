@@ -1509,6 +1509,33 @@ Comprehensive CLI tests verify all commands:
 python -m pytest tests/test_verify_cli.py -v
 ```
 
+### Dependency Supply Chain Hardening
+
+Two baseline controls are implemented:
+
+1. **Hash-locked dependency graph (uv lock)**
+2. **Dependency vulnerability auditing (pip-audit)**
+
+Generate or refresh the lock file:
+```powershell
+.\venv\Scripts\uv.exe lock
+```
+
+Validate lock consistency in CI/local checks:
+```powershell
+.\venv\Scripts\uv.exe lock --check
+```
+
+Run vulnerability audit:
+```powershell
+.\venv\Scripts\python.exe -m pip_audit
+```
+
+Optional JSON output for pipelines:
+```powershell
+.\venv\Scripts\python.exe -m pip_audit -f json -o vulnerabilities.json
+```
+
 ---
 
 ## 🔐 Master Secret Key Rotation

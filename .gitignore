@@ -41,7 +41,6 @@ poetry.lock
 # uv (new package manager)
 .venv/
 venv.lock
-uv.lock
 
 # Testing
 .pytest_cache/
@@ -69,8 +68,12 @@ logs/
 artifacts/
 outputs/
 workflows/
+!.github/workflows/
+!.github/workflows/*.yml
+!.github/workflows/*.yaml
 *.jsonl
 proof.json
+vulnerabilities.json
 
 # Generated files
 *.pyc
