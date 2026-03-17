@@ -32,6 +32,10 @@ import requests as http_requests
 from requests.auth import HTTPBasicAuth
 from urllib.parse import quote
 
+import structlog
+
+logger = structlog.get_logger(__name__)
+
 # Import backend modules
 sys.path.append(os.path.abspath(os.path.dirname(__file__)))
 from agent_backend import mcp_server, security_middleware
@@ -47,6 +51,9 @@ from src.observability.trace_context import TraceContext
 
 # JSON-RPC 2.0 Error Responses (MCP Compliance)
 from src.transport.jsonrpc_errors import JSONRPCError
+
+# LLM Rate Limiting and Complexity Scoring
+from src.security.llm_rate_limiter import LLMRateLimitingPipeline
 
 # --- Input Validation Constants ---
 import re
@@ -140,6 +147,15 @@ settings = get_settings()
 
 # Initialize database early (needed by HTTPSecurityManager for session persistence)
 db = create_database()
+
+# --- LLM Rate Limiting (DoS Mitigation at LLM Layer) ---
+# Prevents sophisticated prompt-based DoS by tracking tokens per session per time window
+llm_rate_limiter = LLMRateLimitingPipeline(
+    complexity_threshold=settings.llm_rate_limiter.complexity_threshold,
+    token_limit=settings.llm_rate_limiter.token_limit_per_window,
+    window_size_sec=settings.llm_rate_limiter.window_size_sec,
+    estimated_response_tokens=settings.llm_rate_limiter.estimated_response_tokens,
+)
 
 # --- HTTP Transport Security ---
 http_security = HTTPSecurityManager(db=db)
@@ -338,6 +354,28 @@ async def chat_in_conversation(conversation_id: str, request: Request):
     # Validate prompt length
     if len(prompt) > MAX_PROMPT_LENGTH:
         return JSONRPCError.prompt_too_long(MAX_PROMPT_LENGTH, len(prompt))
+
+    # --- LLM Rate Limiting and Complexity Scoring (DoS Mitigation) ---
+    # Checks token usage and prompt complexity to prevent expensive DoS attacks
+    allowed, error_msg, complexity_score = llm_rate_limiter.validate_and_score(
+        session_token, prompt
+    )
+    if not allowed:
+        # Rate limit exceeded; return JSON-RPC error with explanation
+        return JSONRPCError.token_rate_limit_exceeded(
+            error_msg,
+            limit=llm_rate_limiter.limiter.token_limit,
+            window_sec=llm_rate_limiter.limiter.window_size_sec,
+        )
+    
+    # Optionally log complexity score for monitoring
+    if complexity_score.is_complex:
+        logger.warning(
+            "complex_prompt_processed",
+            conversation_id=conversation_id,
+            complexity_score=f"{complexity_score.overall_score:.1f}",
+            flags=complexity_score.flags,
+        )
 
     # Extract W3C Trace Context for propagation
     trace_ctx: TraceContext = getattr(request.state, "trace_context", None)
@@ -553,6 +591,28 @@ async def chat_endpoint(request: Request):
     # Validate prompt length
     if len(prompt) > MAX_PROMPT_LENGTH:
         return JSONRPCError.prompt_too_long(MAX_PROMPT_LENGTH, len(prompt))
+
+    # Get session token for rate limiting
+    session_token = get_session_token(request)
+
+    # --- LLM Rate Limiting and Complexity Scoring (DoS Mitigation) ---
+    allowed, error_msg, complexity_score = llm_rate_limiter.validate_and_score(
+        session_token, prompt
+    )
+    if not allowed:
+        return JSONRPCError.token_rate_limit_exceeded(
+            error_msg,
+            limit=llm_rate_limiter.limiter.token_limit,
+            window_sec=llm_rate_limiter.limiter.window_size_sec,
+        )
+    
+    # Optionally log complexity score for monitoring
+    if complexity_score.is_complex:
+        logger.warning(
+            "complex_prompt_processed_simple_chat",
+            complexity_score=f"{complexity_score.overall_score:.1f}",
+            flags=complexity_score.flags,
+        )
 
     # Create a temporary conversation for this single prompt
     conv = conv_manager.create_conversation()

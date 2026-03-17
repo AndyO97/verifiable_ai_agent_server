@@ -117,6 +117,23 @@ class OpenWeatherSettings(BaseSettings):
     base_url: str = "https://api.openweathermap.org/data/2.5"
 
 
+class LLMRateLimiterSettings(BaseSettings):
+    """LLM Rate Limiting configuration (DoS mitigation at LLM layer)"""
+    model_config = ConfigDict(env_prefix="LLM_RATE_LIMITER_", env_file=".env", case_sensitive=False, extra="ignore")
+    
+    # Token-based rate limiting: max total tokens per session per time window
+    token_limit_per_window: int = 500000  # ~1000 pages of text per hour
+    
+    # Time window for token tracking (seconds)
+    window_size_sec: int = 3600  # 1 hour
+    
+    # Estimated tokens in average LLM response (used to calculate total cost)
+    estimated_response_tokens: int = 2000
+    
+    # Prompt complexity threshold (0-100 scale; above this triggers warning logs)
+    complexity_threshold: float = 60.0
+
+
 class Settings(BaseSettings):
     """Main application settings"""
     model_config = ConfigDict(env_file=".env", case_sensitive=False)
@@ -154,6 +171,9 @@ class Settings(BaseSettings):
     
     # OpenWeather
     openweather: OpenWeatherSettings = OpenWeatherSettings()
+    
+    # LLM Rate Limiting (DoS mitigation)
+    llm_rate_limiter: LLMRateLimiterSettings = LLMRateLimiterSettings()
 
 
 # Global settings instance
