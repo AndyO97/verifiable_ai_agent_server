@@ -16,12 +16,63 @@ let sessionToken = null;
 let hmacKeyHex = null;
 let cryptoKey = null;  // CryptoKey object for HMAC-SHA256
 
+const SESSION_TOKEN_STORAGE_KEY = 'mcp_session_token';
+const HMAC_KEY_STORAGE_KEY = 'mcp_hmac_key_hex';
+
+async function importHmacKey(hexKey) {
+  const keyBytes = hexToBytes(hexKey);
+  return crypto.subtle.importKey(
+    'raw', keyBytes, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
+  );
+}
+
+async function restoreSessionFromStorage() {
+  const storedToken = localStorage.getItem(SESSION_TOKEN_STORAGE_KEY);
+  const storedHmacKeyHex = localStorage.getItem(HMAC_KEY_STORAGE_KEY);
+
+  if (!storedToken || !storedHmacKeyHex) {
+    return false;
+  }
+
+  try {
+    cryptoKey = await importHmacKey(storedHmacKeyHex);
+    sessionToken = storedToken;
+    hmacKeyHex = storedHmacKeyHex;
+    return true;
+  } catch (e) {
+    console.warn('Stored session key invalid, creating new session:', e);
+    clearStoredSession();
+    return false;
+  }
+}
+
+function persistSession() {
+  if (!sessionToken || !hmacKeyHex) {
+    return;
+  }
+  localStorage.setItem(SESSION_TOKEN_STORAGE_KEY, sessionToken);
+  localStorage.setItem(HMAC_KEY_STORAGE_KEY, hmacKeyHex);
+}
+
+function clearStoredSession() {
+  localStorage.removeItem(SESSION_TOKEN_STORAGE_KEY);
+  localStorage.removeItem(HMAC_KEY_STORAGE_KEY);
+}
+
 /**
  * Initialize an authenticated HTTP session with the server.
  * Receives session_token + hmac_key for signing subsequent requests.
  */
 async function initSession() {
   try {
+    if (!sessionToken || !cryptoKey) {
+      const restored = await restoreSessionFromStorage();
+      if (restored) {
+        console.log('Restored secure session:', sessionToken.slice(0, 8) + '...');
+        return;
+      }
+    }
+
     const res = await fetch('/api/session/init', { method: 'POST' });
     let data = await res.json();
     // Handle MCP-wrapped response (has .result field)
@@ -31,11 +82,8 @@ async function initSession() {
     sessionToken = data.session_token;
     hmacKeyHex = data.hmac_key;
 
-    // Import HMAC key into Web Crypto API
-    const keyBytes = hexToBytes(hmacKeyHex);
-    cryptoKey = await crypto.subtle.importKey(
-      'raw', keyBytes, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
-    );
+    cryptoKey = await importHmacKey(hmacKeyHex);
+    persistSession();
 
     console.log('Secure session initialized:', sessionToken.slice(0, 8) + '...');
   } catch (e) {
@@ -98,7 +146,9 @@ async function secureFetch(url, options = {}) {
   if (res.status === 401) {
     console.warn('Session expired, re-initializing...');
     sessionToken = null;
+    hmacKeyHex = null;
     cryptoKey = null;
+    clearStoredSession();
     await initSession();
     if (!sessionToken) {
       throw new Error('Failed to re-initialize session');

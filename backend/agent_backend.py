@@ -6,12 +6,11 @@ This script defines the same tools and MCP server setup as agent_multi_tool_demo
 
 import os
 import sys
-import asyncio
 import requests
 import re
-from typing import Any, List
+from typing import List, Optional
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
+
 try:
     from dotenv import load_dotenv
     load_dotenv()
@@ -402,12 +401,12 @@ async def wikipedia_tool(query: str = None, **kwargs) -> str:
             "try 'List of cities by population' or 'List of metropolitan areas'"
         )
 
-async def datetime_tool(format: str = "%Y-%m-%d %H:%M:%S", utc_offset: int = 0, **kwargs) -> str:
+async def datetime_tool(format: str = "%Y-%m-%d %H:%M:%S", utc_offset: Optional[int] = None, **kwargs) -> str:
     """Return current datetime. By default returns local system time. Provide utc_offset to see UTC with conversion to that timezone."""
     try:
         # Check if any parameter contains "offset" in its name
         offset_param_found = None
-        if utc_offset == 0:  # Only look in kwargs if utc_offset wasn't explicitly set
+        if utc_offset is None:  # Only look in kwargs if utc_offset wasn't explicitly set
             for key in kwargs.keys():
                 if 'offset' in key.lower():
                     offset_param_found = key
@@ -422,7 +421,7 @@ async def datetime_tool(format: str = "%Y-%m-%d %H:%M:%S", utc_offset: int = 0, 
         has_extra_params = len(ignored_params) > 0
         extra_params_note = f" (Note: I only accept 'format' and 'utc_offset' parameters, ignoring: {', '.join(ignored_params)})" if has_extra_params else ""
         
-        if utc_offset != 0:
+        if utc_offset is not None:
             # User provided offset: show UTC and converted local time
             now = datetime.now(timezone.utc)
             utc_time = now.strftime(format)
@@ -517,7 +516,7 @@ mcp_server.register_tool(ToolDefinition(
         "type": "object",
         "properties": {
             "format": {"type": "string", "description": "Datetime format (e.g., '%Y-%m-%d %H:%M:%S'). Default shows full datetime.", "default": "%Y-%m-%d %H:%M:%S"},
-            "utc_offset": {"type": "integer", "description": "Optional: UTC offset in hours (e.g., -5 for Miami/EST, +1 for CET). Only provide if you want UTC time with timezone conversion. Omit for local system time.", "default": 0}
+            "utc_offset": {"type": "integer", "description": "Optional: UTC offset in hours (e.g., -5 for Miami/EST, +1 for CET, 0 for UTC/London). Only provide if you want UTC time with timezone conversion. Omit for local system time."}
         },
         "required": []
     },
