@@ -79,15 +79,26 @@ async def currency_tool(from_currency: str, to_currency: str) -> str:
         return f"Error: {str(e)}"
 
 async def math_tool(expression: str = None, **kwargs) -> str:
-    """Evaluate a mathematical expression locally. Accepts 'expression' or any argument starting with 'expr'."""
+    """Evaluate a mathematical expression locally. Accepts 'expression' or any argument starting with 'expr'.
+    
+    Supported operations: +, -, *, /, //, %, **
+    Supported functions: abs(), min(), max(), sum(), pow(), round()
+    Examples: '2+3', '10*5', '2**3', 'max(1,5,3)', 'sum([1,2,3])'
+    """
     # Accept 'expression' or any argument starting with 'expr'
     if expression is None:
         for k, v in kwargs.items():
             if k.startswith('expr'):
                 expression = v
                 break
+    
+    # Check if user provided a non-expression parameter like 'func'
+    if expression is None and kwargs:
+        param_list = ', '.join(kwargs.keys())
+        return f"Error: No mathematical expression provided. I received parameter(s): {param_list}. Please provide an 'expression' parameter like '2+3' or '10*5'."
+    
     if not expression:
-        return "Error: No expression provided."
+        return "Error: No expression provided. Please provide a mathematical expression like '2+3', '10*5', or 'max(1,5,3)'."
     
     # Allowed operators: +, -, *, /, //, %, **
     ALLOWED_OPS = {
@@ -276,7 +287,9 @@ PROMPTS = [
     "Use the 'datetime' tool to get the current datetime. State the result."
 ]
 
-PROMPT_INDEX = int(os.getenv("PROMPT_INDEX", 4))  # Change this to test different tools
+PROMPT_INDEX = int(os.getenv("PROMPT_INDEX", 4))  # 0-4=single prompt; 5+=multi-turn conversation
+# To test multi-turn conversation: set PROMPT_INDEX=10 or higher
+# This will run all prompts sequentially with context preservation
 
 async def main():
     middleware = HierarchicalVerkleMiddleware(session_id=mcp_server.session_id)
@@ -299,11 +312,45 @@ async def main():
         mcp_host=mcp_host,
         llm_client=llm_client
     )
-    prompt = PROMPTS[PROMPT_INDEX]
-    print(f"\nPrompt ({PROMPT_INDEX}): {prompt}\n")
-    result = await agent.run_async(prompt=prompt, max_turns=6)
-    print(f"Agent Output:\n{result['output']}\n")
-    print(f"Session Root: {result['integrity'].get('session_root', 'N/A')}")
+    # Multi-turn conversation mode
+    conversation_history = []
+    
+    # Use PROMPT_INDEX to select which prompt(s) to run
+    if PROMPT_INDEX < len(PROMPTS):
+        # Single-prompt mode for backward compatibility
+        prompts_to_run = [PROMPTS[PROMPT_INDEX]]
+        print(f"\n--- Single-turn mode (Prompt {PROMPT_INDEX}) ---\n")
+    else:
+        # Multi-turn conversation mode: run all prompts in sequence with context
+        prompts_to_run = PROMPTS
+        print(f"\n--- Multi-turn conversation mode (all {len(PROMPTS)} prompts) ---\n")
+    
+    for turn_idx, prompt in enumerate(prompts_to_run, 1):
+        print(f"\n[Turn {turn_idx}] You: {prompt}\n")
+        
+        # Build conversation context from history
+        full_prompt = prompt
+        if conversation_history:
+            context = "Previous in this conversation:\n"
+            for prev_turn, (prev_q, prev_a) in enumerate(conversation_history, 1):
+                context += f"  Q{prev_turn}: {prev_q}\n  A{prev_turn}: {prev_a}\n"
+            full_prompt = context + f"\nNow the user asks: {prompt}"
+        
+        result = await agent.run_async(prompt=full_prompt, max_turns=6)
+        output = result['output']
+        print(f"Agent: {output}\n")
+        
+        # Keep conversation history for next turn
+        conversation_history.append((prompt, output))
+    
+    # Print final results
+    if conversation_history:
+        print(f"\n--- Conversation Summary ---")
+        for i, (q, a) in enumerate(conversation_history, 1):
+            print(f"Q{i}: {q}")
+            print(f"A{i}: {a[:100]}..." if len(a) > 100 else f"A{i}: {a}")
+    
+    print(f"\nSession Root: {result['integrity'].get('session_root', 'N/A')}")
     print(f"Event Accumulator Root: {result['integrity'].get('event_accumulator_root', 'N/A')}\n")
     workflow_dir = Path("workflows") / f"workflow_{middleware.session_id}"
     middleware.save_to_local_storage(workflow_dir)

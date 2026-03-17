@@ -81,6 +81,53 @@ class Conversation:
             session_id=self.session_id,
         )
 
+    def _build_contextual_prompt(self, prompt: str, max_history_pairs: int = 4) -> str:
+        """
+        Build a context-aware prompt from recent conversation history.
+
+        We keep this intentionally simple for demo/backend reliability:
+        include only the latest user/assistant exchanges so short follow-ups
+        like "And the largest one?" can be resolved correctly.
+        """
+        if not self.messages:
+            return prompt
+
+        # Exclude the current user message that was just appended.
+        prior_messages = self.messages[:-1]
+        if not prior_messages:
+            return prompt
+
+        # Build compact history from recent turns only.
+        lines: list[str] = []
+        user_count = 0
+        for msg in reversed(prior_messages):
+            role = msg.get("role", "")
+            content = (msg.get("content") or "").strip()
+            if not content:
+                continue
+
+            if role == "user":
+                lines.append(f"User: {content}")
+                user_count += 1
+            elif role == "assistant":
+                lines.append(f"Assistant: {content}")
+
+            if user_count >= max_history_pairs:
+                break
+
+        if not lines:
+            return prompt
+
+        lines.reverse()
+        history_block = "\n".join(lines)
+        return (
+            "Conversation context (recent history):\n"
+            f"{history_block}\n\n"
+            "Use this context to resolve references like 'it', 'that', 'one', 'largest'. "
+            "If context is ambiguous, ask a clarifying question.\n"
+            f"Current user message: {prompt}"
+        )
+
     async def send_prompt(self, prompt: str, trace_context: TraceContext = None) -> dict:
         """
         Send a prompt within this conversation.
@@ -109,6 +156,8 @@ class Conversation:
             "timestamp": datetime.now().isoformat(),
             "prompt_index": prompt_index,
         })
+
+        contextual_prompt = self._build_contextual_prompt(prompt)
 
         # Create fresh middleware for this prompt
         # Use prompt-specific session_id for Verkle integrity, but share the
@@ -147,7 +196,7 @@ class Conversation:
         )
 
         try:
-            result = await agent.run_async(prompt=prompt, max_turns=6)
+            result = await agent.run_async(prompt=contextual_prompt, max_turns=6)
             response_text = result.get("output", "No response generated.")
             integrity_info = result.get("integrity", {})
 
