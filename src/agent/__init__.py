@@ -567,7 +567,9 @@ class MCPHost:
         self,
         tool_name: str,
         host: str,
-        port: int
+        port: int,
+        use_tls: bool = False,
+        require_tls_channel_binding: bool | None = None,
     ) -> Any:  # Returns SecureMCPClient
         """
         Register a client connection to a remote tool via secure WebSocket.
@@ -576,6 +578,8 @@ class MCPHost:
             tool_name: Identifier for the remote tool
             host: Hostname/IP of remote tool server
             port: WebSocket port of remote tool server
+            use_tls: Use wss:// transport when True
+            require_tls_channel_binding: Enforce TLS channel binding. Defaults to True when use_tls=True.
             
         Returns:
             The connected SecureMCPClient instance
@@ -588,9 +592,26 @@ class MCPHost:
                 "SecureMCPClient not available. Ensure src/transport/secure_mcp.py is accessible."
             )
         
-        client = SecureMCPClient(tool_name, host, port, self.integrity)
+        if require_tls_channel_binding is None:
+            require_tls_channel_binding = use_tls
+
+        client = SecureMCPClient(
+            tool_name,
+            host,
+            port,
+            self.integrity,
+            use_tls=use_tls,
+            require_tls_channel_binding=require_tls_channel_binding,
+        )
         self.remote_clients[tool_name] = client
-        logger.info("remote_tool_registered", tool_name=tool_name, host=host, port=port)
+        logger.info(
+            "remote_tool_registered",
+            tool_name=tool_name,
+            host=host,
+            port=port,
+            use_tls=use_tls,
+            require_tls_channel_binding=require_tls_channel_binding,
+        )
         return client
     
     def invoke_tool(self, tool_call: Any) -> str:

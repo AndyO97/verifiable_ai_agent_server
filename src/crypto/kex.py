@@ -22,15 +22,26 @@ def serialize_public_key(public_key):
 def load_public_key(pem_bytes):
     return serialization.load_pem_public_key(pem_bytes)
 
-def derive_shared_key(private_key, peer_public_key):
-    """Derive AES-256 key from ECDH shared secret"""
+def _build_hkdf_info(channel_binding: bytes | None = None) -> bytes:
+    """Build HKDF context info, optionally bound to TLS channel material."""
+    base = b'handshake'
+    if not channel_binding:
+        return base
+
+    digest = hashes.Hash(hashes.SHA256())
+    digest.update(channel_binding)
+    cb_hash = digest.finalize()
+    return base + b'|tls-cb-sha256:' + cb_hash
+
+def derive_shared_key(private_key, peer_public_key, channel_binding: bytes | None = None):
+    """Derive AES-256 key from ECDH shared secret, optionally channel-bound to TLS."""
     shared_secret = private_key.exchange(ec.ECDH(), peer_public_key)
     # HKDF to derive strong symmetric key
     key = HKDF(
         algorithm=hashes.SHA256(),
         length=32,
         salt=None,
-        info=b'handshake',
+        info=_build_hkdf_info(channel_binding),
     ).derive(shared_secret)
     return key
 

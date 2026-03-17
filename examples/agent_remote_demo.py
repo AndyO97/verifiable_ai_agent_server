@@ -19,6 +19,8 @@ import sys
 import os
 import uuid
 import asyncio
+import socket
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -46,6 +48,27 @@ TOOL_NAME = "remote_calc"
 TOOL_HOST = "localhost"
 TOOL_PORT = 5555
 LOG_FILE = "remote_workflow.jsonl"
+AUTO_START_REMOTE_TOOL = True
+REMOTE_TOOL_START_TIMEOUT_SEC = 12.0
+
+
+def is_port_open(host: str, port: int, timeout_sec: float = 0.5) -> bool:
+    """Return True if TCP service is listening on host:port."""
+    try:
+        with socket.create_connection((host, port), timeout=timeout_sec):
+            return True
+    except OSError:
+        return False
+
+
+async def wait_for_port(host: str, port: int, timeout_sec: float) -> bool:
+    """Poll until host:port is reachable or timeout is reached."""
+    deadline = asyncio.get_running_loop().time() + timeout_sec
+    while asyncio.get_running_loop().time() < deadline:
+        if is_port_open(host, port):
+            return True
+        await asyncio.sleep(0.25)
+    return False
 
 
 def print_subheader(text: str):
@@ -91,8 +114,30 @@ async def main():
     print_subheader("STEP 2: Connect to Remote Tool via Secure WebSocket")
     
     client = SecureMCPClient(TOOL_NAME, TOOL_HOST, TOOL_PORT, middleware)
+    remote_tool_process: subprocess.Popen | None = None
     
     try:
+        # Ensure remote tool listener exists before handshake.
+        if not is_port_open(TOOL_HOST, TOOL_PORT):
+            if AUTO_START_REMOTE_TOOL:
+                print(f"{YELLOW}[INFO] Remote tool not detected on ws://{TOOL_HOST}:{TOOL_PORT}. Auto-starting examples/remote_tool.py...{RESET}")
+                remote_tool_process = subprocess.Popen(
+                    [sys.executable, "examples/remote_tool.py"],
+                    cwd=os.path.abspath(os.path.join(os.path.dirname(__file__), "..")),
+                )
+                ready = await wait_for_port(TOOL_HOST, TOOL_PORT, REMOTE_TOOL_START_TIMEOUT_SEC)
+                if not ready:
+                    raise RuntimeError(
+                        f"Remote tool did not start on {TOOL_HOST}:{TOOL_PORT} within {REMOTE_TOOL_START_TIMEOUT_SEC:.0f}s. "
+                        "Start it manually with: python examples/remote_tool.py"
+                    )
+                print(f"{GREEN}[OK] Remote tool is now reachable on ws://{TOOL_HOST}:{TOOL_PORT}{RESET}")
+            else:
+                raise RuntimeError(
+                    f"Remote tool is not running on ws://{TOOL_HOST}:{TOOL_PORT}. "
+                    "Start it first with: python examples/remote_tool.py"
+                )
+
         # Secure Handshake & Provisioning
         # Connects, performs ECDH, provisions IBS keys
         await client.connect_and_provision() 
@@ -323,6 +368,8 @@ Anyone can verify this at any time, even after the server is restarted.{RESET}
         traceback.print_exc()
     finally:
         await client.close()
+        if remote_tool_process is not None:
+            remote_tool_process.terminate()
 
 if __name__ == "__main__":
     try:

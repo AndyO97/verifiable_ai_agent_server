@@ -19,6 +19,8 @@ Usage:
 import os
 import sys
 import asyncio
+import ast
+import operator
 from typing import Any
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -30,7 +32,7 @@ except ImportError:
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from src.agent import MCPServer, AIAgent, ToolDefinition
+from src.agent import MCPServer, AIAgent, MCPHost, ToolDefinition
 from src.integrity import HierarchicalVerkleMiddleware
 
 # --- Tool Definitions ---
@@ -86,8 +88,58 @@ async def math_tool(expression: str = None, **kwargs) -> str:
                 break
     if not expression:
         return "Error: No expression provided."
+    
+    # Allowed operators: +, -, *, /, //, %, **
+    ALLOWED_OPS = {
+        ast.Add: operator.add,
+        ast.Sub: operator.sub,
+        ast.Mult: operator.mul,
+        ast.Div: operator.truediv,
+        ast.FloorDiv: operator.floordiv,
+        ast.Mod: operator.mod,
+        ast.Pow: operator.pow,
+        ast.UAdd: operator.pos,
+        ast.USub: operator.neg,
+    }
+    
+    # Allowed functions: abs, min, max, sum, pow, round
+    ALLOWED_FUNCS = {
+        'abs': abs, 'min': min, 'max': max, 'sum': sum, 'pow': pow, 'round': round,
+    }
+    
+    def safe_eval_node(node):
+        """Safely evaluate an AST node (no eval, no builtins, no attribute access)."""
+        if isinstance(node, ast.Constant):
+            return node.value
+        elif isinstance(node, ast.Num):  # Older Python versions
+            return node.n
+        elif isinstance(node, ast.BinOp):
+            left = safe_eval_node(node.left)
+            right = safe_eval_node(node.right)
+            op = ALLOWED_OPS.get(type(node.op))
+            if op is None:
+                raise ValueError(f"Operation not allowed")
+            return op(left, right)
+        elif isinstance(node, ast.UnaryOp):
+            operand = safe_eval_node(node.operand)
+            op = ALLOWED_OPS.get(type(node.op))
+            if op is None:
+                raise ValueError(f"Operation not allowed")
+            return op(operand)
+        elif isinstance(node, ast.Call):
+            if not isinstance(node.func, ast.Name):
+                raise ValueError("Complex function calls not allowed")
+            func_name = node.func.id
+            if func_name not in ALLOWED_FUNCS:
+                raise ValueError(f"Function '{func_name}' not allowed")
+            args = [safe_eval_node(arg) for arg in node.args]
+            return ALLOWED_FUNCS[func_name](*args)
+        else:
+            raise ValueError(f"Expression type not allowed")
+    
     try:
-        result = eval(expression, {"__builtins__": {}})
+        tree = ast.parse(expression, mode='eval')
+        result = safe_eval_node(tree.body)
         return f"{expression} = {result}"
     except Exception as e:
         return f"Error: {str(e)}"
@@ -237,10 +289,14 @@ async def main():
         def validate_tool_invocation(self, session_id: str, tool_name: str) -> bool:
             return True
 
-    agent = AIAgent(
+    mcp_host = MCPHost(
         integrity_middleware=middleware,
         security_middleware=DummySecurityMiddleware(),
         mcp_server=mcp_server,
+    )
+
+    agent = AIAgent(
+        mcp_host=mcp_host,
         llm_client=llm_client
     )
     prompt = PROMPTS[PROMPT_INDEX]
