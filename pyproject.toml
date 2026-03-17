@@ -66,6 +66,7 @@ dev = [
 
 [project.scripts]
 verify = "src.tools.verify_cli:main"
+rotate-keys = "src.tools.key_rotation_cli:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src"]

@@ -4,9 +4,170 @@ Manages the Master Secret and issues Derived Keys to Tools.
 """
 
 import ast
-from typing import Tuple, Any
+import base64
+import json
+import os
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Tuple, Any, Optional
+
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from py_ecc.optimized_bls12_381 import FQ, FQ2
 from src.crypto.signatures import IBSScheme, PointG1, PointG2, Scalar
+
+
+def _is_valid_master_secret_hex(secret_hex: str) -> bool:
+    """Validate a 32-byte master secret represented as 64 hex chars."""
+    if len(secret_hex) != 64:
+        return False
+    try:
+        int(secret_hex, 16)
+    except ValueError:
+        return False
+    return True
+
+
+class MasterKeyRing:
+    """
+    Encrypted-at-rest keyring with epoch-based master secret rotation.
+
+    Encryption:
+    - KEK derived via HKDF-SHA256 from bootstrap secret in SECURITY_MASTER_SECRET_KEY
+    - Data encrypted with AES-256-GCM (nonce: 96-bit random)
+    """
+
+    def __init__(
+        self,
+        bootstrap_secret_hex: str,
+        keyring_path: Optional[Path] = None,
+    ):
+        if not _is_valid_master_secret_hex(bootstrap_secret_hex):
+            raise ValueError("SECURITY_MASTER_SECRET_KEY must be 64 hex chars (32 bytes)")
+
+        self._bootstrap_secret_hex = bootstrap_secret_hex
+        self._bootstrap_secret_bytes = bytes.fromhex(bootstrap_secret_hex)
+        self._path = keyring_path or Path("./artifacts/security/master_keyring.enc.json")
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+
+        if not self._path.exists():
+            self._initialize_keyring()
+
+    def _initialize_keyring(self) -> None:
+        """Create first keyring entry using the bootstrap secret as epoch 1."""
+        salt = os.urandom(16)
+        envelope = {
+            "version": 1,
+            "kdf": {
+                "name": "HKDF-SHA256",
+                "salt": base64.b64encode(salt).decode("ascii"),
+                "info": "verifiable-ai-agent/master-keyring/v1",
+            },
+            "active_epoch": 1,
+            "keys": [],
+        }
+
+        entry = self._encrypt_epoch_secret(
+            epoch=1,
+            secret_hex=self._bootstrap_secret_hex,
+            salt=salt,
+        )
+        envelope["keys"].append(entry)
+        self._write_envelope(envelope)
+
+    def _derive_kek(self, salt: bytes) -> bytes:
+        """Derive a 256-bit key-encryption-key from bootstrap secret."""
+        hkdf = HKDF(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=salt,
+            info=b"verifiable-ai-agent/master-keyring/v1",
+        )
+        return hkdf.derive(self._bootstrap_secret_bytes)
+
+    def _read_envelope(self) -> dict:
+        with open(self._path, "r", encoding="utf-8") as f:
+            envelope = json.load(f)
+        if envelope.get("version") != 1:
+            raise ValueError("Unsupported keyring version")
+        return envelope
+
+    def _write_envelope(self, envelope: dict) -> None:
+        tmp_path = self._path.with_suffix(self._path.suffix + ".tmp")
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(envelope, f, indent=2)
+        os.replace(tmp_path, self._path)
+
+    def _encrypt_epoch_secret(self, epoch: int, secret_hex: str, salt: bytes) -> dict:
+        if not _is_valid_master_secret_hex(secret_hex):
+            raise ValueError("Invalid master secret format")
+
+        plaintext = secret_hex.encode("ascii")
+        nonce = os.urandom(12)
+        aad = f"epoch:{epoch}".encode("ascii")
+        kek = self._derive_kek(salt)
+        ciphertext = AESGCM(kek).encrypt(nonce, plaintext, aad)
+
+        return {
+            "epoch": epoch,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "nonce": base64.b64encode(nonce).decode("ascii"),
+            "ciphertext": base64.b64encode(ciphertext).decode("ascii"),
+        }
+
+    def _decrypt_epoch_secret(self, entry: dict, salt: bytes) -> str:
+        epoch = int(entry["epoch"])
+        nonce = base64.b64decode(entry["nonce"])
+        ciphertext = base64.b64decode(entry["ciphertext"])
+        aad = f"epoch:{epoch}".encode("ascii")
+        kek = self._derive_kek(salt)
+        plaintext = AESGCM(kek).decrypt(nonce, ciphertext, aad)
+        secret_hex = plaintext.decode("ascii")
+        if not _is_valid_master_secret_hex(secret_hex):
+            raise ValueError("Decrypted invalid master secret")
+        return secret_hex
+
+    def get_active_epoch(self) -> int:
+        envelope = self._read_envelope()
+        return int(envelope["active_epoch"])
+
+    def get_active_secret_hex(self) -> str:
+        envelope = self._read_envelope()
+        salt = base64.b64decode(envelope["kdf"]["salt"])
+        active_epoch = int(envelope["active_epoch"])
+
+        for entry in envelope.get("keys", []):
+            if int(entry["epoch"]) == active_epoch:
+                return self._decrypt_epoch_secret(entry, salt)
+
+        raise ValueError(f"Active epoch {active_epoch} not found in keyring")
+
+    def rotate(self, new_secret_hex: Optional[str] = None) -> dict:
+        """
+        Rotate to a new active master secret.
+
+        Returns metadata with previous and new epochs.
+        """
+        envelope = self._read_envelope()
+        salt = base64.b64decode(envelope["kdf"]["salt"])
+        current_epoch = int(envelope["active_epoch"])
+        new_epoch = current_epoch + 1
+        next_secret = new_secret_hex or os.urandom(32).hex()
+
+        if not _is_valid_master_secret_hex(next_secret):
+            raise ValueError("Rotated secret must be 64 hex chars (32 bytes)")
+
+        entry = self._encrypt_epoch_secret(new_epoch, next_secret, salt)
+        envelope.setdefault("keys", []).append(entry)
+        envelope["active_epoch"] = new_epoch
+        self._write_envelope(envelope)
+
+        return {
+            "previous_epoch": current_epoch,
+            "new_epoch": new_epoch,
+            "keyring_path": str(self._path),
+        }
 
 class ToolSigner:
     """
@@ -51,17 +212,37 @@ class KeyAuthority:
     The Central Authority (Server).
     Holds the Master Secret Key.
     """
-    def __init__(self, master_secret_hex: str | None = None):
+    def __init__(self, master_secret_hex: str | None = None, keyring_path: Optional[Path] = None):
+        self._keyring: Optional[MasterKeyRing] = None
+        self.active_epoch: Optional[int] = None
+
         secret_int = None
         if master_secret_hex:
+            self._keyring = MasterKeyRing(master_secret_hex, keyring_path=keyring_path)
+            active_secret_hex = self._keyring.get_active_secret_hex()
+            self.active_epoch = self._keyring.get_active_epoch()
+
             try:
-                secret_int = int(master_secret_hex, 16)
+                secret_int = int(active_secret_hex, 16)
             except ValueError:
-                # Fallback or error? For now, fallback to random is dangerous if user expects persistence.
-                # raising error is better.
-                raise ValueError("Invalid hex string for master_secret_key")
+                raise ValueError("Invalid active master secret in keyring")
 
         self._msk, self.mpk = IBSScheme.setup(secret_int)
+
+    def rotate_master_secret(self, new_secret_hex: str | None = None) -> dict:
+        """
+        Rotate to a new master secret epoch and reinitialize authority keys.
+
+        Rotation is only available when initialized with SECURITY_MASTER_SECRET_KEY.
+        """
+        if self._keyring is None:
+            raise ValueError("Key rotation requires SECURITY_MASTER_SECRET_KEY to be configured")
+
+        result = self._keyring.rotate(new_secret_hex)
+        active_secret_hex = self._keyring.get_active_secret_hex()
+        self.active_epoch = self._keyring.get_active_epoch()
+        self._msk, self.mpk = IBSScheme.setup(int(active_secret_hex, 16))
+        return result
 
     def get_public_params(self) -> PointG2:
         """Return Master Public Key"""
