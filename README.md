@@ -128,6 +128,46 @@ python backend/server.py
 - HTTP remains the default (remove `--https` flag to use unencrypted transport)
 - For production: replace with CA-signed certificates (e.g., Let's Encrypt)
 
+### LLM Rate Limiting Configuration
+
+The system includes **token-based rate limiting** to prevent Denial-of-Service attacks at the LLM inference layer (Security Gap 15.2). Configure these limits via environment variables in `.env`:
+
+```bash
+# Maximum total tokens per session per time window (~1000 pages of text)
+LLM_RATE_LIMITER_TOKEN_LIMIT_PER_WINDOW=500000
+
+# Time window for token tracking (seconds) — 1 hour
+LLM_RATE_LIMITER_WINDOW_SIZE_SEC=3600
+
+# Estimated tokens in average LLM response (used to calculate cost)
+LLM_RATE_LIMITER_ESTIMATED_RESPONSE_TOKENS=2000
+
+# Prompt complexity threshold (0-100 scale; above this triggers warning logs)
+LLM_RATE_LIMITER_COMPLEXITY_THRESHOLD=60.0
+```
+
+**How It Works:**
+1. **Token Budget**: Each session has a token budget per hour (default: 500,000 tokens per hour)
+2. **Estimation**: Incoming prompts are estimated at 1 token per 4 characters, plus response estimate
+3. **Rejection**: Requests that would exceed the token budget are rejected with error code `-32008`
+4. **Complexity Scoring**: Prompts are scored for complexity (code patterns, tool invocations, sentence length); high-complexity prompts are logged for monitoring
+
+**Example Rate Limit Response:**
+```json
+{
+  "jsonrpc": "2.0",
+  "error": {
+    "code": -32008,
+    "message": "LLM token budget exceeded for this time window",
+    "data": {
+      "details": "Your prompt would require 8,000 tokens; only 500 remain in your budget.",
+      "limit": 50000,
+      "window_sec": 3600
+    }
+  }
+}
+```
+
 ### Chat Interface Features
 
 | Feature | Description |

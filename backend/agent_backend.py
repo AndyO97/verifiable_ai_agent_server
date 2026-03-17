@@ -477,11 +477,22 @@ mcp_server.register_tool(ToolDefinition(
 ))
 mcp_server.register_tool(ToolDefinition(
     name="math",
-    description="Evaluate a mathematical expression locally.",
+    description=(
+        "Evaluate ONLY mathematical expressions (no code execution). "
+        "Supports: arithmetic (+, -, *, /, //, **, %), parentheses for grouping, "
+        "and functions (abs, round, min, max, sum). "
+        "NOT for: code, variables, loops, conditionals, or Python code. "
+        "Examples: '2 + 3 * 4' ✓ | 'abs(-10)' ✓ | 'min(5, 3, 8)' ✓ | "
+        "'def reverse_list()' ✗ | 'for i in range(10)' ✗ | 'x = 5' ✗"
+    ),
     input_schema={
         "type": "object",
         "properties": {
-            "expression": {"type": "string", "description": "Math expression"}
+            "expression": {
+                "type": "string",
+                "description": "Pure mathematical expression only. No code, variables, or control flow. "
+                              "Examples: '(5 + 3) * 2', 'abs(-10)', 'max(1, 5, 3)', 'round(3.14159, 2)'"
+            }
         },
         "required": ["expression"]
     },

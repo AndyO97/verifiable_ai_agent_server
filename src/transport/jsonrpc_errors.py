@@ -34,9 +34,10 @@ class JSONRPCError:
     INVALID_SESSION = -32005
     PROMPT_TOO_LONG = -32006
     AGENT_ERROR = -32007
-    DATABASE_ERROR = -32008
+    TOKEN_RATE_LIMIT_EXCEEDED = -32008
     VERIFICATION_FAILED = -32009
     INVALID_STATE = -32010
+    DATABASE_ERROR = -32011
 
     # Error messages
     ERROR_MESSAGES = {
@@ -52,9 +53,10 @@ class JSONRPCError:
         INVALID_SESSION: "Invalid or expired session",
         PROMPT_TOO_LONG: "Prompt exceeds maximum length",
         AGENT_ERROR: "Agent execution error",
-        DATABASE_ERROR: "Database error",
+        TOKEN_RATE_LIMIT_EXCEEDED: "LLM token budget exceeded",
         VERIFICATION_FAILED: "Verification failed",
         INVALID_STATE: "Invalid state",
+        DATABASE_ERROR: "Database error",
     }
 
     @staticmethod
@@ -204,6 +206,21 @@ class JSONRPCError:
             JSONRPCError.PROMPT_TOO_LONG,
             message=f"Prompt exceeds maximum length of {max_length} characters (current: {current_length})",
             data={"max_length": max_length, "current_length": current_length},
+        )
+
+    @staticmethod
+    def token_rate_limit_exceeded(
+        details: str, limit: int, window_sec: int
+    ) -> Dict[str, Any]:
+        """LLM token rate limit exceeded response."""
+        return JSONRPCError.error_response(
+            JSONRPCError.TOKEN_RATE_LIMIT_EXCEEDED,
+            message="LLM token budget exceeded for this time window",
+            data={
+                "details": details,
+                "limit": limit,
+                "window_sec": window_sec,
+            },
         )
 
     @staticmethod
