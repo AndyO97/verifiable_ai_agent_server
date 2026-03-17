@@ -1511,6 +1511,109 @@ python -m pytest tests/test_verify_cli.py -v
 
 ---
 
+## 🔐 Master Secret Key Rotation
+
+**Purpose**: Enable periodic rotation of the Master Secret Key (MSK) to reduce blast radius if the key is compromised. Keys are encrypted at rest with AES-256-GCM.
+
+**Prerequisites**: `SECURITY_MASTER_SECRET_KEY` must be configured in [.env](.env). If not set, rotation is unavailable.
+
+### Commands
+
+#### Check Current Active Epoch
+
+```powershell
+python -m src.tools.key_rotation_cli status
+```
+
+Shows the current active key epoch and Master Public Key (MPK) metadata.
+
+**Example output:**
+```
+Active epoch: 1
+Curve: BLS12-381
+Group: G2
+```
+
+#### Rotate to a New Master Secret
+
+```powershell
+python -m src.tools.key_rotation_cli rotate
+```
+
+Advances to a new key epoch with a fresh 256-bit master secret. The rotated key is encrypted at rest in the secure keyring file at `artifacts/security/master_keyring.enc.json`.
+
+**Example output:**
+```
+Master key rotated successfully
+Previous epoch: 1
+New epoch: 2
+Keyring path: artifacts/security/master_keyring.enc.json
+```
+
+### How Key Rotation Works
+
+1. **Bootstrap Source**: Initial key (epoch 1) is created from `SECURITY_MASTER_SECRET_KEY` in [.env](.env)
+2. **Encrypted Storage**: All master secrets are stored encrypted with AES-256-GCM in the keyring file
+3. **Epoch Activation**: Each rotation increments the epoch atomically and sets it as active
+4. **Backward Compatibility**: All past epochs remain in the keyring for signature verification of old logs
+5. **Automatic Reinitialization**: After rotation, new tool signatures use the new epoch's MSK
+
+### When to Rotate
+
+- ✅ **Periodic rotation** (e.g., quarterly or semi-annually) — industry best practice
+- ✅ **After suspected compromise** — immediately rotate if MSK may be exposed
+- ✅ **Key expiry policy** — rotate when reaching organization's key lifetime limit
+- ❌ **Not needed for**: Bug fixes or security patches (rotate only for key compromise scenarios)
+
+### Security Impact
+
+- **Reduces Blast Radius**: Future signatures use new key; past logs remain verifiable with old keys
+- **Encrypted at Rest**: Rotated keys stored as ciphertext + nonce (no plaintext on disk)
+- **Deterministic Startup**: Server always starts with the same bootstrap secret from [.env](.env), then loads the active epoch from the secure keyring
+- **Zero-Trust Verification**: Anyone can verify old and new signatures independently using the epoch-appropriate MPK from `crypto_params.json`
+
+### Storage
+
+The encrypted keyring is stored at `artifacts/security/master_keyring.enc.json` (created automatically on first initialization).
+
+**Keyring structure:**
+```json
+{
+  "version": 1,
+  "kdf": {
+    "name": "HKDF-SHA256",
+    "salt": "<base64_random_salt>",
+    "info": "verifiable-ai-agent/master-keyring/v1"
+  },
+  "active_epoch": 2,
+  "keys": [
+    {
+      "epoch": 1,
+      "created_at": "2026-03-17T14:39:18.000000+00:00",
+      "nonce": "<base64_random_nonce>",
+      "ciphertext": "<base64_encrypted_secret>"
+    },
+    {
+      "epoch": 2,
+      "created_at": "2026-03-17T14:41:22.000000+00:00",
+      "nonce": "<base64_random_nonce>",
+      "ciphertext": "<base64_encrypted_secret>"
+    }
+  ]
+}
+```
+
+**Backup Recommendation**: Periodically back up `artifacts/security/master_keyring.enc.json` to a secure location to protect against disk failures. The [.env](.env) file itself is irreplaceable — losing it means losing the ability to decrypt the keyring.
+
+### Testing
+
+Test the key rotation feature:
+```powershell
+python -m pytest tests/test_key_rotation.py -v
+```
+
+---
+
 ##  Observability
 
 ### OpenTelemetry Export
