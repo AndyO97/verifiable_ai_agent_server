@@ -11,8 +11,7 @@ import ast
 import ssl
 from dataclasses import dataclass
 import websockets
-from websockets.server import serve
-from websockets.client import connect
+from websockets import serve, connect
 
 from src.crypto.encoding import canonicalize_json
 from src.security.key_management import ToolSigner
