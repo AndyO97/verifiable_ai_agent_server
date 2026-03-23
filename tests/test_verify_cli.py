@@ -66,7 +66,7 @@ def sample_events() -> list[dict[str, Any]]:
 
 
 @pytest.fixture
-def log_file_with_commitment(sample_events: list[dict[str, Any]]) -> tuple[Path, str, str]:
+def log_file_with_commitment(sample_events: list[dict[str, Any]], tmp_path: Path) -> tuple[Path, str, str]:
     """Create a temporary log file and compute its commitment"""
     # Create accumulator and compute commitment
     session_id = sample_events[0]["session_id"]
@@ -79,7 +79,7 @@ def log_file_with_commitment(sample_events: list[dict[str, Any]]) -> tuple[Path,
     root_b64 = base64.b64encode(root).decode()
     
     # Write events to temporary file
-    temp_file = Path(tempfile.gettempdir()) / f"test_log_{session_id}.json"
+    temp_file = tmp_path / f"test_log_{session_id}.json"
     with open(temp_file, "w") as f:
         json.dump(sample_events, f)
     

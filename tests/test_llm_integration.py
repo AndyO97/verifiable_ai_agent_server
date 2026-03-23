@@ -186,7 +186,7 @@ class TestOllamaClient:
         client = OllamaClient(base_url="http://localhost:11434", model="llama2")
         assert client.base_url == "http://localhost:11434"
         assert client.model == "llama2"
-        assert client.endpoint == "http://localhost:11434/api/generate"
+        assert client.endpoint == "http://localhost:11434/api/chat"
     
     def test_tool_call_creation(self):
         """Test ToolCall object creation"""

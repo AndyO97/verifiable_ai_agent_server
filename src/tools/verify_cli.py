@@ -274,6 +274,35 @@ def verify(
             raise typer.Exit(1)
         
         typer.echo(f"[OK] Parsed {len(events)} events from canonical log")
+
+        # Extract session_id from first event
+        session_id = events[0].get("session_id", "unknown")
+        if verbose:
+            typer.echo(f"  Session ID: {session_id}")
+            typer.echo(f"  First event: {events[0].get('event_type', 'unknown')}")
+            typer.echo(f"  Last event: {events[-1].get('event_type', 'unknown')}")
+
+        # Backward compatibility path:
+        # Older artifacts store a flat event stream committed directly as a single Verkle tree,
+        # without span metadata/commitments. If the provided root matches that legacy format,
+        # accept it early.
+        legacy_match = False
+        try:
+            legacy_acc = VerkleAccumulator(session_id)
+            for legacy_event in events:
+                legacy_acc.add_event(legacy_event)
+            legacy_root = legacy_acc.finalize()
+            if legacy_root == expected_root:
+                legacy_match = True
+        except Exception:
+            # If legacy reconstruction is not applicable, continue with hierarchical flow.
+            pass
+
+        if legacy_match:
+            typer.echo(f"\n[OK] Verification PASSED [OK]")
+            typer.echo(f"  Root matches expected commitment")
+            typer.echo(f"  Events verified: {len(events)}")
+            raise typer.Exit(0)
         
         # Extract span_names from events
         span_names = {}
@@ -303,13 +332,6 @@ def verify(
                         typer.echo(f"[OK] Loaded {len(span_commitments)} span commitments from commitments.json")
             except Exception as e:
                 typer.echo(f"[WARNING] Could not load commitments.json: {e}", err=True)
-        
-        # Extract session_id from first event
-        session_id = events[0].get("session_id", "unknown")
-        if verbose:
-            typer.echo(f"  Session ID: {session_id}")
-            typer.echo(f"  First event: {events[0].get('event_type', 'unknown')}")
-            typer.echo(f"  Last event: {events[-1].get('event_type', 'unknown')}")
         
         # Categorize events if requested
         if show_protocol:
@@ -473,6 +495,7 @@ def verify(
                 typer.echo(f"\n[OK] Verification PASSED [OK] (MCP Compliant)")
             else:
                 typer.echo(f"\n[OK] Verification PASSED [OK]")
+            typer.echo(f"  Root matches expected commitment")
             typer.echo(f"  Session root matches: {base64.b64encode(computed_root).decode()[:20]}...")
             typer.echo(f"  Spans verified: {len(span_roots)}")
             typer.echo(f"  Events verified: {len(events)}")

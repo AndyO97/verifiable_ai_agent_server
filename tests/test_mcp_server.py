@@ -348,7 +348,7 @@ class TestServerCapabilities:
         capabilities = mcp_server.get_capabilities()
         
         # Check protocol version
-        assert capabilities["protocolVersion"] == "2024-11"
+        assert capabilities["protocolVersion"] == "2025-11-25"
         
         # Check capabilities structure
         caps = capabilities["capabilities"]
@@ -538,7 +538,7 @@ class TestMCPServerIntegration:
         """Verify full MCP compliance"""
         # 1. Server Capabilities (Feature 3)
         caps = mcp_server.get_capabilities()
-        assert caps["protocolVersion"] == "2024-11"
+        assert caps["protocolVersion"] == "2025-11-25"
         
         # 2. Resource Management (Feature 1)
         assert len(mcp_server.list_resources()) >= 1

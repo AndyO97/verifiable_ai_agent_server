@@ -3,6 +3,7 @@ Tests for PostgreSQL-backed atomic counter (Phase 3 Task 3).
 """
 
 import pytest
+import threading
 from unittest.mock import Mock, patch, MagicMock
 
 from src.integrity.database_counter import DatabaseCounter, SessionCounter, create_database_counter
@@ -193,21 +194,59 @@ class TestDatabaseCounter:
 
 
 class TestDatabaseCounterIntegration:
-    """Integration tests for database counter (requires PostgreSQL)"""
+    """Integration tests for database counter using SQLite backend."""
+
+    @pytest.fixture
+    def sqlite_db_url(self, tmp_path):
+        """Create isolated file-backed SQLite DB URL for integration tests."""
+        db_file = tmp_path / "test_counter_integration.sqlite3"
+        return f"sqlite:///{db_file.as_posix()}"
     
     @pytest.mark.integration
-    def test_counter_persistence_across_sessions(self):
-        """Test that counter persists across different session instances"""
-        # This test would require an actual PostgreSQL instance
-        # Skip for now, implement when PostgreSQL test database available
-        pytest.skip("Requires PostgreSQL test database")
+    def test_counter_persistence_across_sessions(self, sqlite_db_url):
+        """Counter value persists when counter object is recreated."""
+        session_id = "integration-session-persistence"
+
+        # First process/session lifecycle
+        counter_a = create_database_counter(session_id, sqlite_db_url)
+        assert counter_a.get_current() == 0
+        assert counter_a.increment() == 1
+        assert counter_a.increment() == 2
+
+        # Simulate restart with new instance and startup validation
+        counter_b = create_database_counter(session_id, sqlite_db_url)
+        assert counter_b.get_current() == 2
+        assert counter_b.increment() == 3
     
     @pytest.mark.integration
-    def test_concurrent_counter_increments(self):
-        """Test thread-safe counter increments"""
-        # This test would require concurrent testing setup
-        # Skip for now, implement with threading or multiprocessing
-        pytest.skip("Requires PostgreSQL test database and threading setup")
+    def test_concurrent_counter_increments(self, sqlite_db_url):
+        """Concurrent increments should not lose updates."""
+        session_id = "integration-session-concurrency"
+        counter = create_database_counter(session_id, sqlite_db_url)
+
+        increments_per_thread = 10
+        thread_count = 4
+        expected_total = increments_per_thread * thread_count
+
+        errors = []
+
+        def worker():
+            try:
+                for _ in range(increments_per_thread):
+                    counter.increment()
+            except Exception as exc:  # pragma: no cover - diagnostic path
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker) for _ in range(thread_count)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert not errors
+
+        restored = create_database_counter(session_id, sqlite_db_url)
+        assert restored.get_current() == expected_total
 
 
 class TestCreateDatabaseCounterFactory:
@@ -229,7 +268,7 @@ class TestCreateDatabaseCounterFactory:
         """Test factory uses PostgreSQL settings from environment"""
         session_id = "test-factory-002"
         
-        with patch('src.config.PostgresSettings') as mock_settings_class:
+        with patch('src.integrity.database_counter.PostgresSettings') as mock_settings_class:
             # Mock the settings instance
             mock_settings = MagicMock()
             mock_settings.user = "testuser"

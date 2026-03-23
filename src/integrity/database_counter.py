@@ -10,6 +10,8 @@ Provides:
 
 
 from datetime import datetime, timezone
+from contextlib import nullcontext
+import threading
 from typing import Optional
 
 import structlog
@@ -67,6 +69,7 @@ class DatabaseCounter:
         self.session_id = session_id
         self.db_url = db_url
         self.local_counter = 0
+        self._lock = threading.Lock()
         
         try:
             self.engine = create_engine(db_url, echo=False)
@@ -101,7 +104,10 @@ class DatabaseCounter:
             if counter_row is not None:
                 db_max_counter = counter_row.max_counter
                 
-                if self.local_counter < db_max_counter:
+                # If local counter is non-zero and behind the persisted value,
+                # treat it as rollback. A zero local counter is a fresh process
+                # startup and should restore from database.
+                if self.local_counter != 0 and self.local_counter < db_max_counter:
                     logger.error(
                         "rollback_detected",
                         session_id=self.session_id,
@@ -137,44 +143,46 @@ class DatabaseCounter:
         Returns:
             Next counter value (incremented in database)
         """
-        try:
-            session = self.Session()
-            
-            # Upsert: insert if not exists, update if exists
-            counter_row = session.query(SessionCounter).filter_by(
-                session_id=self.session_id
-            ).first()
-            
-            if counter_row is None:
-                # First increment for this session
-                new_row = SessionCounter(
+        lock = getattr(self, "_lock", None)
+        with (lock if lock is not None else nullcontext()):
+            try:
+                session = self.Session()
+                
+                # Upsert: insert if not exists, update if exists
+                counter_row = session.query(SessionCounter).filter_by(
+                    session_id=self.session_id
+                ).first()
+                
+                if counter_row is None:
+                    # First increment for this session
+                    new_row = SessionCounter(
+                        session_id=self.session_id,
+                        max_counter=1,
+                        last_updated=datetime.now(timezone.utc)
+                    )
+                    session.add(new_row)
+                    self.local_counter = 1
+                else:
+                    # In-process lock + DB commit keeps increments monotonic for shared instance.
+                    counter_row.max_counter += 1
+                    counter_row.last_updated = datetime.now(timezone.utc)
+                    self.local_counter = counter_row.max_counter
+                
+                session.commit()
+                next_value = self.local_counter
+                
+                logger.debug(
+                    "counter_incremented",
                     session_id=self.session_id,
-                    max_counter=1,
-                    last_updated=datetime.now(timezone.utc)
+                    next_value=next_value
                 )
-                session.add(new_row)
-                self.local_counter = 1
-            else:
-                # Atomic increment
-                counter_row.max_counter += 1
-                counter_row.last_updated = datetime.now(timezone.utc)
-                self.local_counter = counter_row.max_counter
-            
-            session.commit()
-            next_value = self.local_counter
-            
-            logger.debug(
-                "counter_incremented",
-                session_id=self.session_id,
-                next_value=next_value
-            )
-            
-            session.close()
-            return next_value
+                
+                session.close()
+                return next_value
         
-        except SQLAlchemyError as e:
-            logger.error("counter_increment_failed", error=str(e))
-            raise
+            except SQLAlchemyError as e:
+                logger.error("counter_increment_failed", error=str(e))
+                raise
     
     def get_current(self) -> int:
         """
