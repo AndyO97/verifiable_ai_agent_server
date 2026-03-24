@@ -128,3 +128,34 @@ class TestIntegrityMiddleware:
 
         assert middleware._ntp_sync_verified is False
         assert middleware._ntp_offset_ms is None
+
+    def test_dual_audit_sequence_aligns_with_integrity_counters(self, session_id):
+        """Langfuse emission order should align with integrity counter progression."""
+        with patch.object(IntegrityMiddleware, "_initialize_langfuse", lambda self: None):
+            middleware = IntegrityMiddleware(session_id)
+
+        emitted = []
+
+        class StubLangfuse:
+            def record_event(self, name, data):
+                emitted.append(("event", name))
+
+            def record_span(self, name, input_data):
+                emitted.append(("span", name))
+
+        middleware.langfuse_client = StubLangfuse()
+        middleware.trace_id = "trace-test"
+
+        middleware.record_prompt("hello")
+        middleware.record_tool_input("calculator", {"expression": "1+1"})
+        middleware.record_model_output("done")
+
+        counters = [evt["counter"] for evt in middleware.accumulator.events]
+        assert counters == [0, 1, 2]
+
+        # Observability stream order should mirror event recording order.
+        assert emitted == [
+            ("event", "user_prompt"),
+            ("span", "tool_calculator"),
+            ("event", "model_output"),
+        ]

@@ -26,14 +26,17 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 import base64
+import argparse
 import os
 import sys
+from pathlib import Path
 
 import requests as http_requests
 from requests.auth import HTTPBasicAuth
 from urllib.parse import quote
 
 import structlog
+import uvicorn
 
 logger = structlog.get_logger(__name__)
 
@@ -600,6 +603,24 @@ def _delete_langfuse_session(session_id: str) -> dict:
         return {"skipped": True, "reason": str(e)}
 
 
+def resolve_ssl_config(use_https: bool, project_root: Path | None = None) -> tuple[str | None, str | None]:
+    """Resolve SSL certificate/key paths for HTTPS startup mode."""
+    if not use_https:
+        return None, None
+
+    root = project_root or (Path(__file__).parent.parent)
+    certs_dir = root / "certs"
+    cert_file = certs_dir / "localhost.crt"
+    key_file = certs_dir / "localhost.key"
+
+    if cert_file.exists() and key_file.exists():
+        return str(cert_file), str(key_file)
+
+    raise FileNotFoundError(
+        f"HTTPS requested but certificates not found at {certs_dir}/"
+    )
+
+
 # --- Backward-compatible simple chat endpoint ---
 
 @app.post("/api/chat")
@@ -665,10 +686,6 @@ async def chat_endpoint(request: Request):
 
 
 if __name__ == "__main__":
-    import uvicorn
-    import argparse
-    from pathlib import Path
-    
     # Parse command-line arguments
     parser = argparse.ArgumentParser(description="Run the AI Agent Chat Backend Server")
     parser.add_argument("--https", action="store_true", help="Enable HTTPS with self-signed certificates")
@@ -682,20 +699,14 @@ if __name__ == "__main__":
     # Prepare HTTPS config if requested
     ssl_keyfile = None
     ssl_certfile = None
-    if use_https:
-        project_root = Path(__file__).parent.parent
-        certs_dir = project_root / "certs"
-        cert_file = certs_dir / "localhost.crt"
-        key_file = certs_dir / "localhost.key"
-        
-        if cert_file.exists() and key_file.exists():
-            ssl_certfile = str(cert_file)
-            ssl_keyfile = str(key_file)
-            print(f"[HTTPS] Loading SSL certificates from {certs_dir}/")
-        else:
-            print(f"[ERROR] HTTPS requested but certificates not found at {certs_dir}/")
-            print(f"  Generate certificates with: python backend/generate_certs.py")
-            sys.exit(1)
+    try:
+        ssl_certfile, ssl_keyfile = resolve_ssl_config(use_https)
+        if use_https:
+            print(f"[HTTPS] Loading SSL certificates from {Path(ssl_certfile).parent}/")
+    except FileNotFoundError as e:
+        print(f"[ERROR] {e}")
+        print("  Generate certificates with: python backend/generate_certs.py")
+        sys.exit(1)
     
     # Determine protocol
     protocol = "https" if use_https else "http"
