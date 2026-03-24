@@ -15,6 +15,7 @@ import asyncio
 import json
 import threading
 import time
+from unittest.mock import patch
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -397,6 +398,38 @@ def test_http_security_middleware_allows_valid_signed_request_e2e():
     assert response.json()["payload"]["message"] == "hello"
 
 
+def test_http_security_short_circuits_before_hmac_on_stale_timestamp():
+    """Stale timestamps must be rejected before the expensive HMAC verification path."""
+    app, security = _build_http_test_app()
+    client = TestClient(app)
+
+    init_resp = client.post("/api/session/init")
+    assert init_resp.status_code == 200
+    session_data = init_resp.json()
+
+    session_token = session_data["session_token"]
+    hmac_key = session_data["hmac_key"]
+
+    body = json.dumps({"message": "stale"}, separators=(",", ":"))
+    stale_timestamp = str(int(time.time() * 1000) - ((TIMESTAMP_TOLERANCE_SEC + 5) * 1000))
+    headers = _signed_headers(
+        security,
+        session_token,
+        hmac_key,
+        "POST",
+        "/api/protected",
+        body,
+        nonce="stale-ts-nonce-123456",
+        timestamp_ms=stale_timestamp,
+    )
+
+    with patch.object(security, "verify_signature", side_effect=AssertionError("HMAC path should not run")):
+        response = client.post("/api/protected", headers=headers, content=body)
+
+    assert response.status_code == 403
+    assert "timestamp" in response.json().get("error", "").lower()
+
+
 def test_verify_cli_verify_signatures_passes_with_valid_signature(tmp_path: Path):
     """verify --verify-signatures should pass when signature/identity/payload match."""
     runner = CliRunner()
@@ -417,6 +450,89 @@ def test_verify_cli_verify_signatures_passes_with_valid_signature(tmp_path: Path
     assert result.exit_code == 0
     assert "Signatures verified: 1" in result.stdout
     assert "All 1 signatures verified" in result.stdout
+
+
+def test_verify_cli_ignores_telemetry_only_event_fields_for_root_reconstruction(tmp_path: Path):
+    """Telemetry-only fields should not affect reconstructed commitment verification."""
+    authority = KeyAuthority(
+        master_secret_hex="33" * 32,
+        keyring_path=tmp_path / "master_keyring_telemetry.enc.json",
+    )
+    signer = authority.provision_tool("server")
+
+    session_id = "telemetry-safe-session"
+    span_id = "span-telemetry"
+    span_name = "telemetry_span"
+
+    attributes = {"prompt": "hello", "response": "world"}
+    payload_bytes = CanonicalEncoder.encode_event(attributes)
+    signature = signer.sign_message(payload_bytes)
+
+    # Include telemetry-only fields that should not be part of commitment reconstruction.
+    event = {
+        "session_id": session_id,
+        "span_id": span_id,
+        "span_name": span_name,
+        "timestamp": "2026-03-24T12:00:00Z",
+        "event_type": "model_output",
+        "attributes": attributes,
+        "signature": str(signature),
+        "signer_id": "server",
+        "trace_id": "trace-abc-123",
+        "span_duration_ms": 42,
+        "otel_status": "OK",
+    }
+
+    canonical_log_path = tmp_path / "canonical_log.json"
+    canonical_log_path.write_text(json.dumps([event]), encoding="utf-8")
+
+    # Commitments are computed only from core deterministic fields.
+    span_acc = VerkleAccumulator(f"{session_id}_{span_id}")
+    span_acc.add_event(
+        {
+            "session_id": session_id,
+            "counter": 0,
+            "timestamp": event["timestamp"],
+            "event_type": event["event_type"],
+            "payload": attributes,
+            "span_id": span_id,
+        }
+    )
+    span_root_b64 = base64.b64encode(span_acc.finalize()).decode("utf-8")
+
+    commitments_path = tmp_path / "commitments.json"
+    commitments_path.write_text(
+        json.dumps({"span_roots": {span_id: span_root_b64}}),
+        encoding="utf-8",
+    )
+
+    session_acc = VerkleAccumulator(session_id)
+    session_acc.add_event(
+        {
+            "session_id": session_id,
+            "counter": 0,
+            "event_type": "span_commitment",
+            "span_id": span_id,
+            "span_name": span_name,
+            "span_root": span_root_b64,
+            "event_count": 1,
+        }
+    )
+    expected_root_b64 = base64.b64encode(session_acc.finalize()).decode("utf-8")
+
+    (tmp_path / "crypto_params.json").write_text(
+        json.dumps({"mpk": authority.export_mpk()}),
+        encoding="utf-8",
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        verify_cli_app,
+        ["verify", str(canonical_log_path), expected_root_b64],
+    )
+
+    assert result.exit_code == 0
+    assert "Verification PASSED" in result.stdout
 
 
 def test_verify_cli_verify_signatures_fails_with_forged_signer_id(tmp_path: Path):
