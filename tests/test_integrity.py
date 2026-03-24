@@ -3,6 +3,8 @@ Tests for integrity middleware
 """
 
 import pytest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from src.integrity import IntegrityMiddleware
 
@@ -73,3 +75,56 @@ class TestIntegrityMiddleware:
         
         with pytest.raises(RuntimeError, match="after finalization"):
             middleware.record_model_output("Should fail")
+
+    def test_ntp_sync_median_offset_within_threshold(self, session_id):
+        """NTP verification should accept low drift and cache median offset."""
+        with patch.object(IntegrityMiddleware, "_initialize_langfuse", lambda self: None):
+            middleware = IntegrityMiddleware(session_id)
+
+        middleware._ntp_last_check = 0
+
+        # Simulate three NTP servers with offsets: +100ms, +200ms, +300ms.
+        responses = [
+            SimpleNamespace(tx_time=1000.100),
+            SimpleNamespace(tx_time=1000.200),
+            SimpleNamespace(tx_time=1000.300),
+        ]
+
+        with patch("src.integrity.time.time", return_value=1000.0):
+            with patch("src.integrity.ntplib.NTPClient.request", side_effect=responses):
+                middleware._verify_ntp_sync()
+
+        assert middleware._ntp_sync_verified is True
+        # Median of [100, 200, 300]
+        assert middleware._ntp_offset_ms == 200
+
+    def test_ntp_sync_critical_drift_marks_unverified(self, session_id):
+        """Critical drift should mark clock sync as unverified."""
+        with patch.object(IntegrityMiddleware, "_initialize_langfuse", lambda self: None):
+            middleware = IntegrityMiddleware(session_id)
+
+        middleware._ntp_last_check = 0
+
+        # 120s drift is above 60s error threshold.
+        critical = SimpleNamespace(tx_time=1120.0)
+
+        with patch("src.integrity.time.time", return_value=1000.0):
+            with patch("src.integrity.ntplib.NTPClient.request", side_effect=[critical, critical, critical]):
+                middleware._verify_ntp_sync()
+
+        assert middleware._ntp_sync_verified is False
+        assert middleware._ntp_offset_ms == 120000
+
+    def test_ntp_sync_all_servers_unreachable(self, session_id):
+        """If all NTP servers fail, verification should fail closed."""
+        with patch.object(IntegrityMiddleware, "_initialize_langfuse", lambda self: None):
+            middleware = IntegrityMiddleware(session_id)
+
+        middleware._ntp_last_check = 0
+        middleware._ntp_offset_ms = None
+
+        with patch("src.integrity.ntplib.NTPClient.request", side_effect=OSError("network unreachable")):
+            middleware._verify_ntp_sync()
+
+        assert middleware._ntp_sync_verified is False
+        assert middleware._ntp_offset_ms is None
