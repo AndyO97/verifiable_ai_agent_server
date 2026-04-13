@@ -4,6 +4,8 @@ Tests for PostgreSQL-backed atomic counter (Phase 3 Task 3).
 
 import pytest
 import threading
+import time
+import statistics
 from unittest.mock import Mock, patch, MagicMock
 
 from src.integrity.database_counter import DatabaseCounter, SessionCounter, create_database_counter
@@ -247,6 +249,108 @@ class TestDatabaseCounterIntegration:
 
         restored = create_database_counter(session_id, sqlite_db_url)
         assert restored.get_current() == expected_total
+
+    @pytest.mark.integration
+    def test_concurrency_characterization_writes_and_restorations(self, sqlite_db_url):
+        """Characterize concurrent write/restore behavior with throughput and latency metrics."""
+        session_id = "integration-session-concurrency-metrics"
+        counter = create_database_counter(session_id, sqlite_db_url)
+
+        write_threads = 8
+        increments_per_thread = 40
+        total_writes = write_threads * increments_per_thread
+
+        write_latencies_ms: list[float] = []
+        write_errors = []
+        write_lock = threading.Lock()
+
+        def write_worker() -> None:
+            try:
+                for _ in range(increments_per_thread):
+                    t0 = time.perf_counter_ns()
+                    counter.increment()
+                    t1 = time.perf_counter_ns()
+                    with write_lock:
+                        write_latencies_ms.append((t1 - t0) / 1_000_000)
+            except Exception as exc:  # pragma: no cover - diagnostic path
+                write_errors.append(exc)
+
+        start_write_ns = time.perf_counter_ns()
+        workers = [threading.Thread(target=write_worker) for _ in range(write_threads)]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join()
+        write_elapsed_s = (time.perf_counter_ns() - start_write_ns) / 1_000_000_000
+
+        assert not write_errors
+
+        restored_counter = create_database_counter(session_id, sqlite_db_url)
+        assert restored_counter.get_current() == total_writes
+
+        write_throughput_tps = total_writes / write_elapsed_s if write_elapsed_s > 0 else 0.0
+        write_median_ms = statistics.median(write_latencies_ms)
+        write_p95_ms = statistics.quantiles(write_latencies_ms, n=20, method="inclusive")[18]
+        write_max_ms = max(write_latencies_ms)
+
+        restore_threads = 6
+        restores_per_thread = 20
+        total_restores = restore_threads * restores_per_thread
+
+        restore_latencies_ms: list[float] = []
+        restore_errors = []
+        restore_lock = threading.Lock()
+
+        def restore_worker() -> None:
+            try:
+                for _ in range(restores_per_thread):
+                    t0 = time.perf_counter_ns()
+                    restored = create_database_counter(session_id, sqlite_db_url)
+                    current_value = restored.get_current()
+                    t1 = time.perf_counter_ns()
+                    if current_value != total_writes:
+                        raise AssertionError(
+                            f"Unexpected restored value {current_value}, expected {total_writes}"
+                        )
+                    with restore_lock:
+                        restore_latencies_ms.append((t1 - t0) / 1_000_000)
+                    restored.engine.dispose()
+            except Exception as exc:  # pragma: no cover - diagnostic path
+                restore_errors.append(exc)
+
+        start_restore_ns = time.perf_counter_ns()
+        restorers = [threading.Thread(target=restore_worker) for _ in range(restore_threads)]
+        for restorer in restorers:
+            restorer.start()
+        for restorer in restorers:
+            restorer.join()
+        restore_elapsed_s = (time.perf_counter_ns() - start_restore_ns) / 1_000_000_000
+
+        assert not restore_errors
+
+        restore_throughput_tps = (
+            total_restores / restore_elapsed_s if restore_elapsed_s > 0 else 0.0
+        )
+        restore_median_ms = statistics.median(restore_latencies_ms)
+        restore_p95_ms = statistics.quantiles(restore_latencies_ms, n=20, method="inclusive")[18]
+        restore_max_ms = max(restore_latencies_ms)
+
+        # Coarse lock-contention proxy: upper-tail increment latency under concurrent writes.
+        max_observed_lock_wait_ms = write_max_ms
+
+        print(
+            "[6.9.4 concurrency metrics] "
+            f"write_threads={write_threads}, increments_per_thread={increments_per_thread}, total_writes={total_writes}, "
+            f"write_throughput_tps={write_throughput_tps:.2f}, write_median_ms={write_median_ms:.3f}, "
+            f"write_p95_ms={write_p95_ms:.3f}, write_max_ms={write_max_ms:.3f}, "
+            f"restore_threads={restore_threads}, restores_per_thread={restores_per_thread}, total_restores={total_restores}, "
+            f"restore_throughput_tps={restore_throughput_tps:.2f}, restore_median_ms={restore_median_ms:.3f}, "
+            f"restore_p95_ms={restore_p95_ms:.3f}, restore_max_ms={restore_max_ms:.3f}, "
+            f"max_observed_lock_wait_ms={max_observed_lock_wait_ms:.3f}"
+        )
+
+        assert write_throughput_tps > 0
+        assert restore_throughput_tps > 0
 
 
 class TestCreateDatabaseCounterFactory:

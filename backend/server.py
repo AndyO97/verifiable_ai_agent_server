@@ -63,6 +63,7 @@ from src.security.llm_rate_limiter import LLMRateLimitingPipeline
 import re
 
 MAX_PROMPT_LENGTH = 10000  # Maximum prompt length in characters
+MAX_PROMPT_BYTES = 8000  # Maximum prompt size in UTF-8 bytes
 MAX_CONVERSATION_ID_LENGTH = 256  # Maximum conversation ID length
 CONVERSATION_ID_PATTERN = re.compile(r'^[a-zA-Z0-9-]+$')  # Alphanumeric + hyphens only
 
@@ -383,6 +384,11 @@ async def chat_in_conversation(conversation_id: str, request: Request):
     if len(prompt) > MAX_PROMPT_LENGTH:
         return JSONRPCError.prompt_too_long(MAX_PROMPT_LENGTH, len(prompt))
 
+    # Validate prompt byte size (UTF-8) to cap transport payload cost.
+    prompt_bytes = len(prompt.encode("utf-8"))
+    if prompt_bytes > MAX_PROMPT_BYTES:
+        return JSONRPCError.prompt_too_large_bytes(MAX_PROMPT_BYTES, prompt_bytes)
+
     # --- LLM Rate Limiting and Complexity Scoring (DoS Mitigation) ---
     # Checks token usage and prompt complexity to prevent expensive DoS attacks
     allowed, error_msg, complexity_score = llm_rate_limiter.validate_and_score(
@@ -637,6 +643,11 @@ async def chat_endpoint(request: Request):
     # Validate prompt length
     if len(prompt) > MAX_PROMPT_LENGTH:
         return JSONRPCError.prompt_too_long(MAX_PROMPT_LENGTH, len(prompt))
+
+    # Validate prompt byte size (UTF-8) to cap transport payload cost.
+    prompt_bytes = len(prompt.encode("utf-8"))
+    if prompt_bytes > MAX_PROMPT_BYTES:
+        return JSONRPCError.prompt_too_large_bytes(MAX_PROMPT_BYTES, prompt_bytes)
 
     # Get session token for rate limiting
     session_token = get_session_token(request)

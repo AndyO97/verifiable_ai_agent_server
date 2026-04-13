@@ -209,6 +209,17 @@ class JSONRPCError:
         )
 
     @staticmethod
+    def prompt_too_large_bytes(
+        max_bytes: int, current_bytes: int
+    ) -> Dict[str, Any]:
+        """Prompt exceeds maximum UTF-8 byte-size response."""
+        return JSONRPCError.error_response(
+            JSONRPCError.PROMPT_TOO_LONG,
+            message=f"Prompt exceeds maximum size of {max_bytes} bytes (current: {current_bytes})",
+            data={"max_bytes": max_bytes, "current_bytes": current_bytes},
+        )
+
+    @staticmethod
     def token_rate_limit_exceeded(
         details: str, limit: int, window_sec: int
     ) -> Dict[str, Any]:
