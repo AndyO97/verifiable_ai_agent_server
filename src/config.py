@@ -4,7 +4,7 @@ Configuration management for the verifiable AI agent server
 
 from typing import Optional
 
-from pydantic import ConfigDict
+from pydantic import ConfigDict, Field
 from pydantic_settings import BaseSettings
 
 
@@ -32,8 +32,9 @@ class OllamaSettings(BaseSettings):
     
     base_url: str = "http://localhost:11434"
     model: str = "llama3.1"
-    temperature: float = 0.7
-    max_tokens: int = 2000
+    temperature: float = Field(default=0.7, ge=0.0, le=1.0)
+    max_tokens: int = Field(default=2000, ge=1, le=32768)
+    timeout_seconds: int = Field(default=120, ge=1, le=600)
 
 
 class OpenRouterSettings(BaseSettings):

@@ -36,6 +36,18 @@ class LatencyMetrics:
     p95_ms: float
     p99_ms: float
     stddev_ms: float
+
+    @property
+    def spread_ms(self) -> float:
+        """Absolute range between the fastest and slowest measurements."""
+        return self.max_ms - self.min_ms
+
+    @property
+    def spread_pct_of_median(self) -> float:
+        """Relative spread normalized by median to compare across scales."""
+        if self.median_ms == 0:
+            return 0.0
+        return (self.spread_ms / self.median_ms) * 100.0
     
     def __str__(self) -> str:
         """Format metrics for display"""
@@ -93,6 +105,30 @@ class LatencyBenchmark:
 
 class TestKZGLatency:
     """Latency tests for KZG commitment generation"""
+
+    @staticmethod
+    def _collect_kzg_size_profile(
+        poly_sizes: List[int], iterations_per_size: int = 40
+    ) -> List[Tuple[int, LatencyMetrics]]:
+        """
+        Measure KZG commit latency across multiple polynomial sizes.
+
+        Returns a list of (size, metrics) tuples in the provided size order.
+        """
+        committer = KZGCommitter()
+        profile: List[Tuple[int, LatencyMetrics]] = []
+
+        for poly_size in poly_sizes:
+            poly = [i % 100 for i in range(poly_size)]
+
+            def commit_op():
+                committer.commit(poly)
+
+            metrics = LatencyBenchmark.measure(commit_op, iterations=iterations_per_size)
+            metrics.operation = f"KZG Commit ({poly_size} coeffs)"
+            profile.append((poly_size, metrics))
+
+        return profile
     
     def test_kzg_commit_latency_small_polynomial(self):
         """Benchmark KZG commitment for small polynomial (typical case)"""
@@ -145,26 +181,108 @@ class TestKZGLatency:
         assert metrics.mean_ms < 200, f"Mean latency {metrics.mean_ms:.2f}ms exceeds 200ms"
     
     def test_kzg_commit_scaling(self):
-        """Test how KZG commit latency scales with polynomial size"""
-        committer = KZGCommitter()
-        results = []
-        
-        for poly_size in [5, 10, 20, 32, 64]:
-            poly = [i % 100 for i in range(poly_size)]
-            
-            def commit_op():
-                committer.commit(poly)
-            
-            metrics = LatencyBenchmark.measure(commit_op, iterations=25)
-            metrics.operation = f"KZG Commit ({poly_size} coeffs)"
-            results.append(metrics)
-            print(f"\n{metrics}")
-        
-        # Verify that latency doesn't explode with size
-        # Linear scaling: 64 coeffs should be ~12x slower than 5 coeffs (64/5 = 12.8)
-        # Allow some overhead: up to 20x is acceptable
-        latencies = [m.mean_ms for m in results]
-        assert latencies[-1] < latencies[0] * 100, "Latency scaling is reasonable (<100x)"
+        """Test how KZG commit latency scales with polynomial size."""
+        profile = self._collect_kzg_size_profile(
+            poly_sizes=[4, 8, 16, 32, 64, 128],
+            iterations_per_size=30,
+        )
+
+        print("\nKZG size-scaling profile (median/min/max/spread):")
+        print("  size | median_ms | min_ms | max_ms | spread_ms | spread_pct_median")
+        for poly_size, metrics in profile:
+            print(
+                f"  {poly_size:4d} | "
+                f"{metrics.median_ms:9.3f} | "
+                f"{metrics.min_ms:6.3f} | "
+                f"{metrics.max_ms:6.3f} | "
+                f"{metrics.spread_ms:9.3f} | "
+                f"{metrics.spread_pct_of_median:17.1f}%"
+            )
+
+        print("\nKZG adjacent-size median growth:")
+        print("  from -> to | delta_ms | ratio")
+        for idx in range(1, len(profile)):
+            prev_size, prev_metrics = profile[idx - 1]
+            curr_size, curr_metrics = profile[idx]
+            delta_ms = curr_metrics.median_ms - prev_metrics.median_ms
+            ratio = (
+                curr_metrics.median_ms / prev_metrics.median_ms
+                if prev_metrics.median_ms > 0
+                else float("inf")
+            )
+            print(f"  {prev_size:4d} -> {curr_size:3d} | {delta_ms:8.3f} | {ratio:5.2f}x")
+
+        smallest_size, smallest_metrics = profile[0]
+        largest_size, largest_metrics = profile[-1]
+        endpoint_delta = largest_metrics.median_ms - smallest_metrics.median_ms
+        endpoint_ratio = largest_metrics.median_ms / smallest_metrics.median_ms
+        print("\nKZG endpoint comparison:")
+        print(
+            f"  {smallest_size} -> {largest_size} coeffs | "
+            f"delta={endpoint_delta:.3f}ms | ratio={endpoint_ratio:.2f}x"
+        )
+
+        # Guardrails: median latency should not explode with larger polynomials.
+        median_latencies = [metrics.median_ms for _, metrics in profile]
+        smallest_per_coeff = smallest_metrics.median_ms / smallest_size
+        largest_per_coeff = largest_metrics.median_ms / largest_size
+        per_coeff_ratio = (
+            largest_per_coeff / smallest_per_coeff
+            if smallest_per_coeff > 0
+            else float("inf")
+        )
+        print(
+            f"  normalized per-coeff ratio (largest/smallest): {per_coeff_ratio:.2f}x"
+        )
+
+        assert per_coeff_ratio < 10, (
+            "Per-coefficient median scaling from smallest to largest size is too high"
+        )
+        assert max(median_latencies) < 50, "Median KZG commit latency should stay <50ms"
+
+    def test_kzg_commit_distribution_summary(self):
+        """
+        Provide a compact statistical summary for documentation capture.
+
+        This test is intentionally print-heavy so `pytest -s` output can be copied
+        into implementation documentation with exact benchmark values.
+        """
+        profile = self._collect_kzg_size_profile(
+            poly_sizes=[5, 32, 128],
+            iterations_per_size=50,
+        )
+
+        print("\nKZG distribution summary (documentation capture):")
+        for poly_size, metrics in profile:
+            print(
+                f"  size={poly_size:3d} | "
+                f"median={metrics.median_ms:.3f}ms | "
+                f"low={metrics.min_ms:.3f}ms | "
+                f"high={metrics.max_ms:.3f}ms | "
+                f"spread={metrics.spread_ms:.3f}ms ({metrics.spread_pct_of_median:.1f}% of median)"
+            )
+
+        small_size, small_metrics = profile[0]
+        medium_size, medium_metrics = profile[1]
+        large_size, large_metrics = profile[2]
+        print("\nKZG relationship summary:")
+        print(
+            f"  {small_size}->{medium_size}: "
+            f"+{(medium_metrics.median_ms - small_metrics.median_ms):.3f}ms "
+            f"({(medium_metrics.median_ms / small_metrics.median_ms):.2f}x)"
+        )
+        print(
+            f"  {medium_size}->{large_size}: "
+            f"+{(large_metrics.median_ms - medium_metrics.median_ms):.3f}ms "
+            f"({(large_metrics.median_ms / medium_metrics.median_ms):.2f}x)"
+        )
+        print(
+            f"  {small_size}->{large_size}: "
+            f"+{(large_metrics.median_ms - small_metrics.median_ms):.3f}ms "
+            f"({(large_metrics.median_ms / small_metrics.median_ms):.2f}x)"
+        )
+
+        assert small_metrics.median_ms <= medium_metrics.median_ms <= large_metrics.median_ms
 
 
 class TestVerkleAccumulatorLatency:

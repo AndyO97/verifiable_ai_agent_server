@@ -70,6 +70,7 @@ class OllamaClient:
         settings = get_settings()
         self.base_url = base_url or settings.ollama.base_url
         self.model = model or settings.ollama.model
+        self.timeout_seconds = settings.ollama.timeout_seconds
         self.endpoint = f"{self.base_url}/api/chat"
         logger.info("ollama_client_initialized", model=self.model, base_url=self.base_url)
     
@@ -143,7 +144,7 @@ class OllamaClient:
                         "num_predict": max_tokens,
                     }
                 },
-                timeout=120
+                timeout=self.timeout_seconds
             )
             
             if response.status_code != 200:
