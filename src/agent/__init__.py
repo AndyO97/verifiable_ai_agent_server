@@ -667,25 +667,33 @@ class MCPHost:
         ):
             error_msg = f"Unauthorized tool: {tool_call.tool_name}"
             logger.warning("tool_call_blocked", tool=tool_call.tool_name)
-            
+
             # Record the blocked attempt for audit purposes
             self.integrity.record_tool_input(tool_call.tool_name, tool_call.arguments)
             blocked_result = f"Error: {error_msg}"
             self.integrity.record_tool_output(tool_call.tool_name, blocked_result)
             return blocked_result
-        
+
+        # Step 1b: Description poisoning check
+        tool_def = self.mcp.tools.get(tool_call.tool_name)
+        if tool_def and self.security.is_description_poisoned(tool_def.description):
+            return self.block_tool_call(
+                tool_call, "Tool description contains manipulation patterns."
+            )
+
         # Step 2-5: Record input, execute, record output
         self.integrity.record_tool_input(tool_call.tool_name, tool_call.arguments)
         try:
+            self.security.sanitize_tool_arguments(tool_call.tool_name, tool_call.arguments)
             tool_result = self.mcp.invoke_tool(tool_call.tool_name, tool_call.arguments)
             logger.info("tool_executed", tool=tool_call.tool_name, result=str(tool_result)[:100])
         except Exception as e:
             tool_result = f"Error executing tool: {str(e)}"
             logger.exception("tool_execution_error", tool=tool_call.tool_name)
-        
+
         self.integrity.record_tool_output(tool_call.tool_name, tool_result)
         return tool_result
-    
+
     async def invoke_tool_async(self, tool_call: Any) -> str:
         """
         Asynchronously invoke a tool with authorization and integrity recording.
@@ -710,22 +718,30 @@ class MCPHost:
         ):
             error_msg = f"Unauthorized tool: {tool_call.tool_name}"
             logger.warning("tool_call_blocked", tool=tool_call.tool_name)
-            
+
             # Record the blocked attempt for audit purposes
             self.integrity.record_tool_input(tool_call.tool_name, tool_call.arguments)
             blocked_result = f"Error: {error_msg}"
             self.integrity.record_tool_output(tool_call.tool_name, blocked_result)
             return blocked_result
-        
+
+        # Step 1b: Description poisoning check
+        tool_def = self.mcp.tools.get(tool_call.tool_name)
+        if tool_def and self.security.is_description_poisoned(tool_def.description):
+            return self.block_tool_call(
+                tool_call, "Tool description contains manipulation patterns."
+            )
+
         # Step 2-5: Record input, execute, record output
         self.integrity.record_tool_input(tool_call.tool_name, tool_call.arguments)
         try:
+            self.security.sanitize_tool_arguments(tool_call.tool_name, tool_call.arguments)
             tool_result = await self.mcp.invoke_tool_async(tool_call.tool_name, tool_call.arguments)
             logger.info("tool_executed", tool=tool_call.tool_name, result=str(tool_result)[:100])
         except Exception as e:
             tool_result = f"Error executing tool: {str(e)}"
             logger.exception("tool_execution_error", tool=tool_call.tool_name)
-        
+
         self.integrity.record_tool_output(tool_call.tool_name, tool_result)
         return tool_result
     
@@ -1025,7 +1041,7 @@ class AIAgent:
                     
                     # Process each tool call — delegate to MCPHost for auth + execution
                     tool_results_parts = []
-                    current_prompt = conversation_history[-1]["content"] if conversation_history else ""
+                    current_prompt = conversation_history[0]["content"] if conversation_history else ""
                     for tool_call in llm_response.tool_calls:
                         logger.info("tool_call_requested", tool=tool_call.tool_name, args=tool_call.arguments)
                         if not self.mcp_host.is_sensitive_intent_allowed(tool_call.tool_name, current_prompt):
@@ -1098,7 +1114,7 @@ class AIAgent:
                     
                     # Process each tool call (async path) — delegate to MCPHost
                     tool_results_parts = []
-                    current_prompt = conversation_history[-1]["content"] if conversation_history else ""
+                    current_prompt = conversation_history[0]["content"] if conversation_history else ""
                     for tool_call in llm_response.tool_calls:
                         logger.info("tool_call_requested", tool=tool_call.tool_name, args=tool_call.arguments)
                         if not self.mcp_host.is_sensitive_intent_allowed(tool_call.tool_name, current_prompt):

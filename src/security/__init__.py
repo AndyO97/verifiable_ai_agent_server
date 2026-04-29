@@ -2,9 +2,22 @@
 Security module - Authorization and threat prevention
 """
 
+import re
 import structlog
 from enum import Enum
 from typing import Any
+
+_SHELL_META_RE = re.compile(r'[&|;`]|\$\(')
+_PATH_TRAVERSAL_RE = re.compile(r'\.\.[/\\]|^\.\.$')
+_DESCRIPTION_POISON_RE = re.compile(
+    r'\balways use\b'
+    r'|\buse this tool\b'
+    r'|\bbest tool for\b'
+    r'|\bignore other tools?\b'
+    r'|\bmust use this\b'
+    r'|\bprefer this tool\b',
+    re.IGNORECASE,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -83,6 +96,34 @@ class SecurityMiddleware:
                 count=len(tool_names)
             )
     
+    def sanitize_tool_arguments(self, tool_name: str, arguments: dict[str, Any]) -> None:
+        """Raise ValueError if any string argument contains shell injection or path traversal payloads."""
+        for key, value in arguments.items():
+            if not isinstance(value, str):
+                continue
+            if _SHELL_META_RE.search(value):
+                logger.warning(
+                    "shell_injection_detected",
+                    tool_name=tool_name,
+                    argument=key,
+                )
+                raise ValueError(
+                    f"Shell injection payload detected in argument '{key}' for tool '{tool_name}'"
+                )
+            if _PATH_TRAVERSAL_RE.search(value):
+                logger.warning(
+                    "path_traversal_detected",
+                    tool_name=tool_name,
+                    argument=key,
+                )
+                raise ValueError(
+                    f"Path traversal payload detected in argument '{key}' for tool '{tool_name}'"
+                )
+
+    def is_description_poisoned(self, description: str) -> bool:
+        """Return True if a tool description contains LLM-steering manipulation phrases."""
+        return bool(_DESCRIPTION_POISON_RE.search(description or ""))
+
     def validate_tool_invocation(self, session_id: str, tool_name: str) -> bool:
         """
         Validate that a tool invocation is authorized.
