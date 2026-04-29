@@ -66,6 +66,15 @@ MAX_PROMPT_LENGTH = 10000  # Maximum prompt length in characters
 MAX_PROMPT_BYTES = 8000  # Maximum prompt size in UTF-8 bytes
 MAX_CONVERSATION_ID_LENGTH = 256  # Maximum conversation ID length
 CONVERSATION_ID_PATTERN = re.compile(r'^[a-zA-Z0-9-]+$')  # Alphanumeric + hyphens only
+TOOL_ENUMERATION_PATTERNS = [
+    re.compile(r"\blist\s+tools\b", re.IGNORECASE),
+    re.compile(r"\bshow\s+tools\b", re.IGNORECASE),
+    re.compile(r"\btool\s+list\b", re.IGNORECASE),
+    re.compile(r"\btool\s+schemas?\b", re.IGNORECASE),
+    re.compile(r"\btool\s+definitions?\b", re.IGNORECASE),
+    re.compile(r"\bavailable\s+tools\b", re.IGNORECASE),
+    re.compile(r"\bfull\s+schemas?\b", re.IGNORECASE),
+]
 
 # --- MCP Response Wrapper (Issue #10) ---
 # Wraps responses with _meta field for MCP 2025-11-25 compliance
@@ -110,6 +119,11 @@ def validate_conversation_id(conversation_id: str) -> tuple[bool, str]:
         return False, "Conversation ID must contain only alphanumeric characters and hyphens."
     
     return True, ""
+
+
+def is_tool_enumeration_attempt(prompt: str) -> bool:
+    """Detect tool enumeration attempts to prevent schema disclosure."""
+    return any(pattern.search(prompt) for pattern in TOOL_ENUMERATION_PATTERNS)
 
 
 def get_session_token(request: Request) -> str:
@@ -384,6 +398,11 @@ async def chat_in_conversation(conversation_id: str, request: Request):
     if len(prompt) > MAX_PROMPT_LENGTH:
         return JSONRPCError.prompt_too_long(MAX_PROMPT_LENGTH, len(prompt))
 
+    if is_tool_enumeration_attempt(prompt):
+        return JSONRPCError.invalid_params(
+            "Tool listing or schema disclosure requests are not permitted."
+        )
+
     # Validate prompt byte size (UTF-8) to cap transport payload cost.
     prompt_bytes = len(prompt.encode("utf-8"))
     if prompt_bytes > MAX_PROMPT_BYTES:
@@ -643,6 +662,11 @@ async def chat_endpoint(request: Request):
     # Validate prompt length
     if len(prompt) > MAX_PROMPT_LENGTH:
         return JSONRPCError.prompt_too_long(MAX_PROMPT_LENGTH, len(prompt))
+
+    if is_tool_enumeration_attempt(prompt):
+        return JSONRPCError.invalid_params(
+            "Tool listing or schema disclosure requests are not permitted."
+        )
 
     # Validate prompt byte size (UTF-8) to cap transport payload cost.
     prompt_bytes = len(prompt.encode("utf-8"))

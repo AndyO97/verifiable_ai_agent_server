@@ -140,7 +140,21 @@ async function secureFetch(url, options = {}) {
     }
   }
 
-  let res = await _signedFetch(url, options);
+  let res;
+  try {
+    res = await _signedFetch(url, options);
+  } catch (err) {
+    console.warn('Network error, re-initializing session and retrying once:', err);
+    sessionToken = null;
+    hmacKeyHex = null;
+    cryptoKey = null;
+    clearStoredSession();
+    await initSession();
+    if (!sessionToken) {
+      throw err;
+    }
+    res = await _signedFetch(url, options);
+  }
 
   // If session expired (e.g. server restarted), re-init and retry once
   if (res.status === 401) {
