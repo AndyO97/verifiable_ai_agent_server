@@ -74,12 +74,16 @@ class ToolDefinition:
         name: str,
         description: str,
         input_schema: dict[str, Any],
-        handler: callable
+        handler: callable,
+        sensitive: bool = False,
+        sensitive_intent_keywords: Optional[list[str]] = None,
     ):
         self.name = name
         self.description = description
         self.input_schema = input_schema  # Pydantic schema
         self.handler = handler
+        self.sensitive = sensitive
+        self.sensitive_intent_keywords = sensitive_intent_keywords or []
     
     def validate_input(self, args: dict[str, Any]) -> bool:
         """Validate input against schema.
@@ -562,6 +566,32 @@ class MCPHost:
         self.remote_clients: dict[str, Any] = {}  # tool_name -> SecureMCPClient
         
         logger.info("mcp_host_initialized", session_id=self.integrity.session_id)
+
+    def is_sensitive_intent_allowed(self, tool_name: str, prompt: str) -> bool:
+        tool = self.mcp.tools.get(tool_name)
+        if tool is None or not getattr(tool, "sensitive", False):
+            return True
+
+        prompt_lower = (prompt or "").lower()
+        keywords = tool.sensitive_intent_keywords or [
+            "secret",
+            "credential",
+            "password",
+            "api key",
+            "token",
+            "key",
+            "file",
+            "read",
+            "dump",
+        ]
+        return any(keyword in prompt_lower for keyword in keywords)
+
+    def block_tool_call(self, tool_call: Any, reason: str) -> str:
+        logger.warning("tool_call_blocked", tool=tool_call.tool_name, reason=reason)
+        self.integrity.record_tool_input(tool_call.tool_name, tool_call.arguments)
+        blocked_result = f"Error: {reason}"
+        self.integrity.record_tool_output(tool_call.tool_name, blocked_result)
+        return blocked_result
     
     def register_remote_tool(
         self,
@@ -995,9 +1025,16 @@ class AIAgent:
                     
                     # Process each tool call — delegate to MCPHost for auth + execution
                     tool_results_parts = []
+                    current_prompt = conversation_history[-1]["content"] if conversation_history else ""
                     for tool_call in llm_response.tool_calls:
                         logger.info("tool_call_requested", tool=tool_call.tool_name, args=tool_call.arguments)
-                        tool_result = self.mcp_host.invoke_tool(tool_call)
+                        if not self.mcp_host.is_sensitive_intent_allowed(tool_call.tool_name, current_prompt):
+                            tool_result = self.mcp_host.block_tool_call(
+                                tool_call,
+                                "Sensitive tool requires explicit intent in the prompt.",
+                            )
+                        else:
+                            tool_result = self.mcp_host.invoke_tool(tool_call)
                         tool_results_parts.append(f"Tool '{tool_call.tool_name}' returned: {tool_result}")
                     
                     self._append_tool_results_to_history(
@@ -1061,9 +1098,16 @@ class AIAgent:
                     
                     # Process each tool call (async path) — delegate to MCPHost
                     tool_results_parts = []
+                    current_prompt = conversation_history[-1]["content"] if conversation_history else ""
                     for tool_call in llm_response.tool_calls:
                         logger.info("tool_call_requested", tool=tool_call.tool_name, args=tool_call.arguments)
-                        tool_result = await self.mcp_host.invoke_tool_async(tool_call)
+                        if not self.mcp_host.is_sensitive_intent_allowed(tool_call.tool_name, current_prompt):
+                            tool_result = self.mcp_host.block_tool_call(
+                                tool_call,
+                                "Sensitive tool requires explicit intent in the prompt.",
+                            )
+                        else:
+                            tool_result = await self.mcp_host.invoke_tool_async(tool_call)
                         tool_results_parts.append(f"Tool '{tool_call.tool_name}' returned: {tool_result}")
                     
                     self._append_tool_results_to_history(
